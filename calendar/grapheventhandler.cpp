@@ -1,0 +1,211 @@
+/*
+    SPDX-FileCopyrightText: 2026 Malte Zilinski <malte@zilinski.eu>
+    SPDX-License-Identifier: LGPL-2.0-or-later
+*/
+
+#include "grapheventhandler.h"
+
+#include <KCalendarCore/Attendee>
+#include <KCalendarCore/Person>
+#include <KCalendarCore/Recurrence>
+#include <KCalendarCore/RecurrenceRule>
+
+#include <QBitArray>
+#include <QDate>
+#include <QDateTime>
+#include <QJsonArray>
+#include <QTimeZone>
+
+using namespace KCalendarCore;
+
+namespace
+{
+// Graph dateTimeTimeZone -> QDateTime. Times are requested in UTC via the Prefer header,
+// so the string is UTC; all-day events carry a date at midnight.
+QDateTime parseGraphDateTime(const QJsonObject &dtz, bool allDay)
+{
+    const QString raw = dtz.value(QLatin1String("dateTime")).toString();
+    if (raw.isEmpty()) {
+        return {};
+    }
+    // Graph uses 7 fractional digits; QDateTime::fromString(Qt::ISODateWithMs) wants <=3.
+    QString normalized = raw;
+    const int dot = normalized.indexOf(QLatin1Char('.'));
+    if (dot >= 0) {
+        normalized = normalized.left(dot);
+    }
+    QDateTime dt = QDateTime::fromString(normalized, QStringLiteral("yyyy-MM-ddTHH:mm:ss"));
+    dt.setTimeZone(QTimeZone::utc());
+    if (allDay) {
+        return dt.toLocalTime(); // date component is what matters
+    }
+    return dt;
+}
+
+QJsonObject utcDateTime(const QDateTime &dt, bool allDay)
+{
+    QJsonObject o;
+    const QDateTime u = dt.toUTC();
+    o.insert(QStringLiteral("dateTime"), u.toString(allDay ? QStringLiteral("yyyy-MM-ddT00:00:00.0000000") : QStringLiteral("yyyy-MM-ddTHH:mm:ss.0000000")));
+    o.insert(QStringLiteral("timeZone"), QStringLiteral("UTC"));
+    return o;
+}
+
+void applyRecurrence(const QJsonObject &recurrence, const Event::Ptr &event)
+{
+    const QJsonObject pattern = recurrence.value(QLatin1String("pattern")).toObject();
+    const QJsonObject range = recurrence.value(QLatin1String("range")).toObject();
+    if (pattern.isEmpty()) {
+        return;
+    }
+    const QString type = pattern.value(QLatin1String("type")).toString();
+    const int interval = pattern.value(QLatin1String("interval")).toInt(1);
+    Recurrence *r = event->recurrence();
+
+    if (type == QLatin1String("daily")) {
+        r->setDaily(interval);
+    } else if (type == QLatin1String("weekly")) {
+        QBitArray days(7);
+        static const QHash<QString, int> dayMap = {{QStringLiteral("monday"), 0},
+                                                   {QStringLiteral("tuesday"), 1},
+                                                   {QStringLiteral("wednesday"), 2},
+                                                   {QStringLiteral("thursday"), 3},
+                                                   {QStringLiteral("friday"), 4},
+                                                   {QStringLiteral("saturday"), 5},
+                                                   {QStringLiteral("sunday"), 6}};
+        const QJsonArray daysOfWeek = pattern.value(QLatin1String("daysOfWeek")).toArray();
+        for (const auto &d : daysOfWeek) {
+            const int idx = dayMap.value(d.toString(), -1);
+            if (idx >= 0) {
+                days.setBit(idx);
+            }
+        }
+        r->setWeekly(interval, days);
+    } else if (type == QLatin1String("absoluteMonthly") || type == QLatin1String("relativeMonthly")) {
+        r->setMonthly(interval);
+    } else if (type == QLatin1String("absoluteYearly") || type == QLatin1String("relativeYearly")) {
+        r->setYearly(interval);
+    } else {
+        return; // unsupported pattern -> treat as single occurrence
+    }
+
+    const QString rangeType = range.value(QLatin1String("type")).toString();
+    if (rangeType == QLatin1String("numbered")) {
+        r->setDuration(range.value(QLatin1String("numberOfOccurrences")).toInt());
+    } else if (rangeType == QLatin1String("endDate")) {
+        const QDate end = QDate::fromString(range.value(QLatin1String("endDate")).toString(), Qt::ISODate);
+        if (end.isValid()) {
+            r->setEndDate(end);
+        }
+    }
+}
+} // namespace
+
+namespace GraphEventHandler
+{
+QString mimeType()
+{
+    return QStringLiteral("application/x-vnd.akonadi.calendar.event");
+}
+
+KCalendarCore::Event::Ptr toEvent(const QJsonObject &json)
+{
+    if (json.value(QLatin1String("id")).toString().isEmpty()) {
+        return {};
+    }
+    auto event = Event::Ptr(new Event);
+    const QString uid = json.value(QLatin1String("iCalUId")).toString();
+    event->setUid(uid.isEmpty() ? json.value(QLatin1String("id")).toString() : uid);
+    event->setSummary(json.value(QLatin1String("subject")).toString());
+
+    const QJsonObject body = json.value(QLatin1String("body")).toObject();
+    if (body.value(QLatin1String("contentType")).toString() == QLatin1String("text")) {
+        event->setDescription(body.value(QLatin1String("content")).toString());
+    } else {
+        event->setDescription(json.value(QLatin1String("bodyPreview")).toString());
+    }
+
+    const bool allDay = json.value(QLatin1String("isAllDay")).toBool();
+    event->setAllDay(allDay);
+    event->setDtStart(parseGraphDateTime(json.value(QLatin1String("start")).toObject(), allDay));
+    event->setDtEnd(parseGraphDateTime(json.value(QLatin1String("end")).toObject(), allDay));
+
+    event->setLocation(json.value(QLatin1String("location")).toObject().value(QLatin1String("displayName")).toString());
+
+    const QJsonObject organizer = json.value(QLatin1String("organizer")).toObject().value(QLatin1String("emailAddress")).toObject();
+    if (!organizer.isEmpty()) {
+        event->setOrganizer(Person(organizer.value(QLatin1String("name")).toString(), organizer.value(QLatin1String("address")).toString()));
+    }
+
+    const QJsonArray attendees = json.value(QLatin1String("attendees")).toArray();
+    for (const auto &a : attendees) {
+        const QJsonObject ao = a.toObject();
+        const QJsonObject email = ao.value(QLatin1String("emailAddress")).toObject();
+        if (email.isEmpty()) {
+            continue;
+        }
+        Attendee att(email.value(QLatin1String("name")).toString(), email.value(QLatin1String("address")).toString());
+        const QString resp = ao.value(QLatin1String("status")).toObject().value(QLatin1String("response")).toString();
+        if (resp == QLatin1String("accepted")) {
+            att.setStatus(Attendee::Accepted);
+        } else if (resp == QLatin1String("declined")) {
+            att.setStatus(Attendee::Declined);
+        } else if (resp == QLatin1String("tentativelyAccepted")) {
+            att.setStatus(Attendee::Tentative);
+        }
+        event->addAttendee(att);
+    }
+
+    QStringList categories;
+    const QJsonArray cats = json.value(QLatin1String("categories")).toArray();
+    for (const auto &c : cats) {
+        categories << c.toString();
+    }
+    event->setCategories(categories);
+
+    if (json.value(QLatin1String("showAs")).toString() == QLatin1String("free")) {
+        event->setTransparency(Event::Transparent);
+    }
+    const QString sensitivity = json.value(QLatin1String("sensitivity")).toString();
+    if (sensitivity == QLatin1String("private")) {
+        event->setSecrecy(Incidence::SecrecyPrivate);
+    } else if (sensitivity == QLatin1String("confidential")) {
+        event->setSecrecy(Incidence::SecrecyConfidential);
+    }
+
+    const QJsonObject recurrence = json.value(QLatin1String("recurrence")).toObject();
+    if (!recurrence.isEmpty()) {
+        applyRecurrence(recurrence, event);
+    }
+
+    return event;
+}
+
+QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
+{
+    QJsonObject json;
+    json.insert(QStringLiteral("subject"), event->summary());
+
+    QJsonObject body;
+    body.insert(QStringLiteral("contentType"), QStringLiteral("text"));
+    body.insert(QStringLiteral("content"), event->description());
+    json.insert(QStringLiteral("body"), body);
+
+    const bool allDay = event->allDay();
+    json.insert(QStringLiteral("isAllDay"), allDay);
+    json.insert(QStringLiteral("start"), utcDateTime(event->dtStart(), allDay));
+    json.insert(QStringLiteral("end"), utcDateTime(event->dtEnd(), allDay));
+
+    if (!event->location().isEmpty()) {
+        QJsonObject loc;
+        loc.insert(QStringLiteral("displayName"), event->location());
+        json.insert(QStringLiteral("location"), loc);
+    }
+
+    if (!event->categories().isEmpty()) {
+        json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(event->categories()));
+    }
+    json.insert(QStringLiteral("showAs"), event->transparency() == Event::Transparent ? QStringLiteral("free") : QStringLiteral("busy"));
+    return json;
+}
+}

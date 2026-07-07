@@ -1,0 +1,17 @@
+version = 1
+
+# Files that cannot carry an inline SPDX header cleanly (config, desktop and docs).
+# Every source file (.cpp/.h/.py) carries its own SPDX header.
+
+[[annotations]]
+path = [
+    "README.md",
+    "IMPLEMENTATION.md",
+    "graphresource.kcfg",
+    "graphsettingsbase.kcfgc",
+    "graphresource.desktop.cmake",
+    "graphmtaresource.desktop",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Malte Zilinski <malte@zilinski.eu>"
+SPDX-License-Identifier = "LGPL-2.0-or-later"

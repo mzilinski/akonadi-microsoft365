@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Malte Zilinski <malte@zilinski.eu>
+# SPDX-License-Identifier: CC0-1.0
+build/
+build-*/
+*.user
+*.kate-swp
+.cache/
+compile_commands.json
