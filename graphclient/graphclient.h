@@ -21,7 +21,7 @@ public:
     ~GraphClient();
 
     void setBaseUrl(const QString &baseUrl); // https://graph.microsoft.com/v1.0
-    void setAuth(GraphOAuth *auth);          // token provider (not owned)
+    void setAuth(GraphOAuth *auth); // token provider (not owned)
 
     QString baseUrl() const;
     GraphOAuth *auth() const;

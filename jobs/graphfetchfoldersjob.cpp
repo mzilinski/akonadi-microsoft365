@@ -110,11 +110,29 @@ void GraphFetchFoldersJob::onRequestFinished(KJob *job)
     emitResult();
 }
 
-bool GraphFetchFoldersJob::isIncremental() const { return mIncremental; }
-Collection::List GraphFetchFoldersJob::allCollections() const { return mAll; }
-Collection::List GraphFetchFoldersJob::changedCollections() const { return mChanged; }
-Collection::List GraphFetchFoldersJob::removedCollections() const { return mRemoved; }
-QString GraphFetchFoldersJob::deltaLink() const { return mDeltaLink; }
-Collection GraphFetchFoldersJob::rootCollection() const { return mRoot; }
+bool GraphFetchFoldersJob::isIncremental() const
+{
+    return mIncremental;
+}
+Collection::List GraphFetchFoldersJob::allCollections() const
+{
+    return mAll;
+}
+Collection::List GraphFetchFoldersJob::changedCollections() const
+{
+    return mChanged;
+}
+Collection::List GraphFetchFoldersJob::removedCollections() const
+{
+    return mRemoved;
+}
+QString GraphFetchFoldersJob::deltaLink() const
+{
+    return mDeltaLink;
+}
+Collection GraphFetchFoldersJob::rootCollection() const
+{
+    return mRoot;
+}
 
 #include "moc_graphfetchfoldersjob.cpp"

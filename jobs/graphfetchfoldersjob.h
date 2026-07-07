@@ -21,11 +21,11 @@ public:
 
     void start() override;
 
-    bool isIncremental() const;                          // true if a deltaLink was supplied
-    Akonadi::Collection::List allCollections() const;    // full sync
-    Akonadi::Collection::List changedCollections() const;// incremental
-    Akonadi::Collection::List removedCollections() const;// incremental (@removed)
-    QString deltaLink() const;                           // persist for next sync
+    bool isIncremental() const; // true if a deltaLink was supplied
+    Akonadi::Collection::List allCollections() const; // full sync
+    Akonadi::Collection::List changedCollections() const; // incremental
+    Akonadi::Collection::List removedCollections() const; // incremental (@removed)
+    QString deltaLink() const; // persist for next sync
 
     /// Root collection with its remoteId resolved to the real msgfolderroot id.
     Akonadi::Collection rootCollection() const;

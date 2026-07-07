@@ -64,7 +64,7 @@ private:
     QString mClientId;
     QString mWalletKey;
     QString mEnvToken; // GRAPH_ACCESS_TOKEN test hook
-    bool mWasReady = false;    // ready() already emitted
+    bool mWasReady = false; // ready() already emitted
     bool mInteractive = false; // current attempt is the interactive flow
     std::unique_ptr<QOAuth2AuthorizationCodeFlow> mFlow;
     QOAuthHttpServerReplyHandler *mReplyHandler = nullptr;

@@ -17,8 +17,8 @@
 #include "contact/graphcontacthandler.h"
 #include "jobs/graphbatchjob.h"
 #include "jobs/graphfetchfoldersjob.h"
-#include "jobs/graphfetchitemsjob.h"
 #include "jobs/graphfetchitempayloadjob.h"
+#include "jobs/graphfetchitemsjob.h"
 #include "jobs/graphfetchpimitemsjob.h"
 #include "mail/graphmailhandler.h"
 
@@ -46,9 +46,9 @@ namespace
 {
 // Graph well-known mail folder names (language independent) -> Akonadi special type.
 struct SpecialFolder {
-    const char *wellKnownName;      // segment for /me/mailFolders/<name>
+    const char *wellKnownName; // segment for /me/mailFolders/<name>
     SpecialMailCollections::Type type;
-    const char *attributeType;      // SpecialCollectionAttribute value
+    const char *attributeType; // SpecialCollectionAttribute value
     const char *iconName;
 };
 const SpecialFolder kSpecialFolders[] = {
@@ -241,7 +241,7 @@ void GraphResource::fetchExtraCollections()
                 }
                 const bool canEdit = cal.value(QLatin1String("canEdit")).toBool();
                 qCDebug(GRAPH_LOG) << "calendar" << cal.value(QLatin1String("name")).toString() << "canEdit" << canEdit << "default"
-                                  << cal.value(QLatin1String("isDefaultCalendar")).toBool();
+                                   << cal.value(QLatin1String("isDefaultCalendar")).toBool();
                 Collection col;
                 col.setRemoteId(id);
                 col.setName(cal.value(QLatin1String("name")).toString());
@@ -313,7 +313,7 @@ void GraphResource::fetchFoldersJobFinished(KJob *job)
     mRootCollection.setName(name());
 
     qCDebug(GRAPH_LOG) << "folders fetched, incremental:" << fj->isIncremental() << "all:" << fj->allCollections().size()
-                      << "changed:" << fj->changedCollections().size() << "removed:" << fj->removedCollections().size();
+                       << "changed:" << fj->changedCollections().size() << "removed:" << fj->removedCollections().size();
 
     if (fj->isIncremental()) {
         Collection::List changed = fj->changedCollections();
@@ -378,7 +378,7 @@ void GraphResource::fetchPimItemsJobFinished(KJob *job)
     }
     auto *fj = qobject_cast<GraphFetchPimItemsJob *>(job);
     qCDebug(GRAPH_LOG) << "pim delta" << fj->collection().name() << "changed:" << fj->changedItems().size() << "removed:" << fj->removedItems().size()
-                      << "deltaLink:" << (fj->deltaLink().isEmpty() ? "none" : "stored");
+                       << "deltaLink:" << (fj->deltaLink().isEmpty() ? "none" : "stored");
     saveCollectionDeltaLink(fj->collection(), fj->deltaLink());
     // Incremental: unmentioned items are kept, @removed tombstones are removed.
     itemsRetrievedIncremental(fj->changedItems(), fj->removedItems());
@@ -454,7 +454,8 @@ void GraphResource::fetchPayloadJobFinished(KJob *job)
 
 void GraphResource::itemsFlagsChanged(const Item::List &items, const QSet<QByteArray> &addedFlags, const QSet<QByteArray> &removedFlags)
 {
-    Q_UNUSED(addedFlags) Q_UNUSED(removedFlags) // item.flags() already carries the final state
+    Q_UNUSED(addedFlags)
+    Q_UNUSED(removedFlags) // item.flags() already carries the final state
     QList<GraphBatchJob::Call> calls;
     calls.reserve(items.size());
     for (const Item &item : items) {

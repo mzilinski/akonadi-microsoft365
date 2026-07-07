@@ -21,8 +21,8 @@
 #include "graphclient/graphrequest.h"
 #include "jobs/graphbatchjob.h"
 #include "jobs/graphfetchfoldersjob.h"
-#include "jobs/graphfetchitemsjob.h"
 #include "jobs/graphfetchitempayloadjob.h"
+#include "jobs/graphfetchitemsjob.h"
 
 #include <Akonadi/MessageFlags>
 #include <KMime/Message>

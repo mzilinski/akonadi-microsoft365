@@ -105,6 +105,9 @@ void GraphFetchItemPayloadJob::applyMime(Item &item, const QByteArray &mime)
     item.setPayload(msg);
 }
 
-Item::List GraphFetchItemPayloadJob::items() const { return mItems; }
+Item::List GraphFetchItemPayloadJob::items() const
+{
+    return mItems;
+}
 
 #include "moc_graphfetchitempayloadjob.cpp"

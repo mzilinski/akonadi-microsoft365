@@ -5,8 +5,8 @@
 
 #include "graphrequest.h"
 
-#include "graphclient.h"
 #include "auth/graphoauth.h"
+#include "graphclient.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -22,12 +22,30 @@ GraphRequest::GraphRequest(GraphClient &client, QObject *parent)
 {
 }
 
-void GraphRequest::setMethod(Method m) { mMethod = m; }
-void GraphRequest::setPath(const QString &path) { mPath = path; }
-void GraphRequest::setAbsoluteUrl(const QUrl &url) { mAbsoluteUrl = url; }
-void GraphRequest::setFollowPaging(bool follow) { mFollowPaging = follow; }
-void GraphRequest::setExpectRawPayload(bool raw) { mExpectRaw = raw; }
-void GraphRequest::addHeader(const QByteArray &name, const QByteArray &value) { mHeaders.append({name, value}); }
+void GraphRequest::setMethod(Method m)
+{
+    mMethod = m;
+}
+void GraphRequest::setPath(const QString &path)
+{
+    mPath = path;
+}
+void GraphRequest::setAbsoluteUrl(const QUrl &url)
+{
+    mAbsoluteUrl = url;
+}
+void GraphRequest::setFollowPaging(bool follow)
+{
+    mFollowPaging = follow;
+}
+void GraphRequest::setExpectRawPayload(bool raw)
+{
+    mExpectRaw = raw;
+}
+void GraphRequest::addHeader(const QByteArray &name, const QByteArray &value)
+{
+    mHeaders.append({name, value});
+}
 
 void GraphRequest::setBody(const QJsonObject &body)
 {
@@ -61,10 +79,18 @@ void GraphRequest::issue(const QUrl &url)
     QNetworkAccessManager *nam = mClient.networkAccessManager();
     QNetworkReply *reply = nullptr;
     switch (mMethod) {
-    case Get:    reply = nam->get(req); break;
-    case Delete: reply = nam->deleteResource(req); break;
-    case Post:   reply = nam->post(req, mBody); break;
-    case Patch:  reply = nam->sendCustomRequest(req, "PATCH", mBody); break;
+    case Get:
+        reply = nam->get(req);
+        break;
+    case Delete:
+        reply = nam->deleteResource(req);
+        break;
+    case Post:
+        reply = nam->post(req, mBody);
+        break;
+    case Patch:
+        reply = nam->sendCustomRequest(req, "PATCH", mBody);
+        break;
     }
     connect(reply, &QNetworkReply::finished, this, &GraphRequest::onReplyFinished);
 }
@@ -133,13 +159,30 @@ void GraphRequest::onReplyFinished()
 
 void GraphRequest::scheduleRetry(int seconds, const QUrl &url)
 {
-    QTimer::singleShot(seconds * 1000, this, [this, url] { issue(url); });
+    QTimer::singleShot(seconds * 1000, this, [this, url] {
+        issue(url);
+    });
 }
 
-QJsonObject GraphRequest::responseObject() const { return mResponseObject; }
-QJsonArray GraphRequest::aggregatedValue() const { return mAggregated; }
-QByteArray GraphRequest::rawPayload() const { return mRawPayload; }
-QString GraphRequest::deltaLink() const { return mDeltaLink; }
-int GraphRequest::httpStatus() const { return mHttpStatus; }
+QJsonObject GraphRequest::responseObject() const
+{
+    return mResponseObject;
+}
+QJsonArray GraphRequest::aggregatedValue() const
+{
+    return mAggregated;
+}
+QByteArray GraphRequest::rawPayload() const
+{
+    return mRawPayload;
+}
+QString GraphRequest::deltaLink() const
+{
+    return mDeltaLink;
+}
+int GraphRequest::httpStatus() const
+{
+    return mHttpStatus;
+}
 
 #include "moc_graphrequest.cpp"

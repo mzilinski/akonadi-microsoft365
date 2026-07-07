@@ -131,9 +131,21 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
     emitResult();
 }
 
-Collection GraphFetchPimItemsJob::collection() const { return mCollection; }
-Item::List GraphFetchPimItemsJob::changedItems() const { return mChanged; }
-Item::List GraphFetchPimItemsJob::removedItems() const { return mRemoved; }
-QString GraphFetchPimItemsJob::deltaLink() const { return mDeltaLink; }
+Collection GraphFetchPimItemsJob::collection() const
+{
+    return mCollection;
+}
+Item::List GraphFetchPimItemsJob::changedItems() const
+{
+    return mChanged;
+}
+Item::List GraphFetchPimItemsJob::removedItems() const
+{
+    return mRemoved;
+}
+QString GraphFetchPimItemsJob::deltaLink() const
+{
+    return mDeltaLink;
+}
 
 #include "moc_graphfetchpimitemsjob.cpp"

@@ -25,27 +25,32 @@ class GraphRequest : public KJob
 {
     Q_OBJECT
 public:
-    enum Method { Get, Post, Patch, Delete };
+    enum Method {
+        Get,
+        Post,
+        Patch,
+        Delete
+    };
 
     GraphRequest(GraphClient &client, QObject *parent = nullptr);
 
     void setMethod(Method m);
-    void setPath(const QString &path);          // e.g. "/me/mailFolders/delta" (relative to baseUrl)
-    void setAbsoluteUrl(const QUrl &url);        // e.g. a stored nextLink/deltaLink (overrides path)
+    void setPath(const QString &path); // e.g. "/me/mailFolders/delta" (relative to baseUrl)
+    void setAbsoluteUrl(const QUrl &url); // e.g. a stored nextLink/deltaLink (overrides path)
     void setBody(const QJsonObject &body);
     void setRawBody(const QByteArray &body, const QByteArray &contentType);
-    void setFollowPaging(bool follow);           // aggregate @odata.value across nextLinks
-    void setExpectRawPayload(bool raw);          // for /$value (returns MIME bytes, not JSON)
+    void setFollowPaging(bool follow); // aggregate @odata.value across nextLinks
+    void setExpectRawPayload(bool raw); // for /$value (returns MIME bytes, not JSON)
     void addHeader(const QByteArray &name, const QByteArray &value); // e.g. Prefer
 
     void start() override;
 
     // Results (available in result slot):
-    QJsonObject responseObject() const;          // single-object responses
-    QJsonArray aggregatedValue() const;          // paged list responses ("value" concatenated)
-    QByteArray rawPayload() const;               // when setExpectRawPayload(true)
-    QString deltaLink() const;                   // @odata.deltaLink from the final page (if any)
-    int httpStatus() const;                      // HTTP status of the (last) reply
+    QJsonObject responseObject() const; // single-object responses
+    QJsonArray aggregatedValue() const; // paged list responses ("value" concatenated)
+    QByteArray rawPayload() const; // when setExpectRawPayload(true)
+    QString deltaLink() const; // @odata.deltaLink from the final page (if any)
+    int httpStatus() const; // HTTP status of the (last) reply
 
 private Q_SLOTS:
     void onReplyFinished();

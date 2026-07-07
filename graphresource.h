@@ -135,7 +135,7 @@ private:
     QScopedPointer<GraphOAuth> mAuth;
     QScopedPointer<GraphSettings> mSettings;
     Akonadi::Collection mRootCollection;
-    QString mFolderDeltaLink;   // top-level mailFolders delta
+    QString mFolderDeltaLink; // top-level mailFolders delta
     QString mSentFolderRemoteId; // resolved "Sent Items" folder id (sent reconciliation)
     QHash<QString, int> mSpecialFolderIndex; // remoteId -> kSpecialFolders index
     Akonadi::Collection::List mExtraCollections; // calendars + contacts

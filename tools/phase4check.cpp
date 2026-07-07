@@ -259,7 +259,8 @@ int main(int argc, char **argv)
         QJsonObject s{{QStringLiteral("dateTime"), QStringLiteral("2026-10-01T08:00:00")}, {QStringLiteral("timeZone"), QStringLiteral("UTC")}};
         QJsonObject e{{QStringLiteral("dateTime"), QStringLiteral("2026-10-01T09:00:00")}, {QStringLiteral("timeZone"), QStringLiteral("UTC")}};
         QJsonObject body{{QStringLiteral("subject"), QStringLiteral("delta probe")}, {QStringLiteral("start"), s}, {QStringLiteral("end"), e}};
-        const QString newId = request(client, GraphRequest::Post, QStringLiteral("/me/calendars/%1/events").arg(calId), body).value(QLatin1String("id")).toString();
+        const QString newId =
+            request(client, GraphRequest::Post, QStringLiteral("/me/calendars/%1/events").arg(calId), body).value(QLatin1String("id")).toString();
 
         auto *added = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl2);
         runJob(added);

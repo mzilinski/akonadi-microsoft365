@@ -31,8 +31,12 @@ public:
     void sendItem(const Akonadi::Item &item) override;
 
 protected Q_SLOTS:
-    void retrieveCollections() override {} // transport-only: no collections
-    void retrieveItems(const Akonadi::Collection &) override {}
+    void retrieveCollections() override
+    {
+    } // transport-only: no collections
+    void retrieveItems(const Akonadi::Collection &) override
+    {
+    }
     bool retrieveItems(const Akonadi::Item::List &, const QSet<QByteArray> &) override
     {
         return false;

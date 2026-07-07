@@ -40,10 +40,7 @@ int main(int argc, char **argv)
         for (const Collection &c : cols) {
             if (const auto *a = c.attribute<SpecialCollectionAttribute>()) {
                 const auto *d = c.attribute<EntityDisplayAttribute>();
-                std::printf("  %-24s -> %-10s icon=%s\n",
-                            qPrintable(c.name()),
-                            a->collectionType().constData(),
-                            d ? qPrintable(d->iconName()) : "(none)");
+                std::printf("  %-24s -> %-10s icon=%s\n", qPrintable(c.name()), a->collectionType().constData(), d ? qPrintable(d->iconName()) : "(none)");
                 ++tagged;
             }
         }
