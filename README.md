@@ -74,7 +74,7 @@ The resource is an **Akonadi agent** — a plugin in the Akonadi sense: a standa
 executable registered via a `.desktop` descriptor and loaded/scheduled by the Akonadi
 server. Internally it is organised as clear layers rather than a dynamic plugin registry:
 
-```
+```text
 graphresource.{h,cpp}        Akonadi::ResourceBase — retrieve*/change-replay dispatch
 graphmtaresource.{h,cpp}     transport agent, forwards MIME to the master over D-Bus
 graphconfigdialog.{h,cpp}    account configuration dialog
@@ -102,7 +102,7 @@ The `tools/` binaries (built only in a stand-alone build, never installed) exerc
 code against a real tenant or a running Akonadi:
 
 | Tool | What it checks |
-|---|---|
+| --- | --- |
 | `graphsmoketest` | client layer + mail sync jobs (needs `GRAPH_ACCESS_TOKEN`) |
 | `phase4check` | calendar/contacts read, write round-trip and delta incrementality |
 | `writetest` | event/contact create/modify/delete through a running resource |

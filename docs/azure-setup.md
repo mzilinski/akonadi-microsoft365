@@ -73,7 +73,7 @@ After installing (see the top-level [README](../README.md)):
 ## Tenant values at a glance
 
 | Value | Meaning |
-|---|---|
+| --- | --- |
 | `common` | Personal **and** work/school accounts |
 | `organizations` | Work/school only (any tenant) |
 | `consumers` | Personal Microsoft accounts only |
@@ -82,6 +82,7 @@ After installing (see the top-level [README](../README.md)):
 ## Token storage
 
 The refresh token lives in **KWallet/QtKeychain** under:
+
 - Service: `akonadi_graph_resource`
 - Key: the resource instance id (e.g. `akonadi_graph_resource_0`)
 

@@ -15,14 +15,27 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 
     set(KF_MIN_VERSION "6.0.0")
     find_package(ECM ${KF_MIN_VERSION} REQUIRED NO_MODULE)
-    set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH} ${CMAKE_MODULE_PATH})
+    set(CMAKE_MODULE_PATH
+        ${ECM_MODULE_PATH}
+        ${CMAKE_MODULE_PATH}
+    )
 
     include(KDEInstallDirs)
     include(KDECMakeSettings)
     include(KDECompilerSettings NO_POLICY_SCOPE)
     include(ECMQtDeclareLoggingCategory)
 
-    find_package(Qt6 REQUIRED COMPONENTS Core DBus Gui Network NetworkAuth Widgets)
+    find_package(
+        Qt6
+        REQUIRED
+        COMPONENTS
+            Core
+            DBus
+            Gui
+            Network
+            NetworkAuth
+            Widgets
+    )
     find_package(KF6Config ${KF_MIN_VERSION} CONFIG REQUIRED)
     find_package(KF6I18n ${KF_MIN_VERSION} CONFIG REQUIRED)
     find_package(KF6Mime CONFIG REQUIRED)
@@ -88,8 +101,14 @@ qt_add_dbus_adaptor(graphresource_SRCS
 )
 
 add_executable(akonadi_graph_resource ${graphresource_SRCS})
-target_include_directories(akonadi_graph_resource PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(akonadi_graph_resource
+target_include_directories(
+    akonadi_graph_resource
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}
+)
+target_link_libraries(
+    akonadi_graph_resource
     KPim6::AkonadiAgentWidgetBase
     KPim6::AkonadiCore
     KPim6::AkonadiMime
@@ -115,8 +134,14 @@ if(HAVE_SEPARATE_MTA_RESOURCE)
         graphresourceinterface
     )
     add_executable(akonadi_graphmta_resource ${graphmtaresource_SRCS})
-    target_include_directories(akonadi_graphmta_resource PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-    target_link_libraries(akonadi_graphmta_resource
+    target_include_directories(
+        akonadi_graphmta_resource
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    target_link_libraries(
+        akonadi_graphmta_resource
         KPim6::AkonadiAgentWidgetBase
         KPim6::AkonadiCore
         KF6::Mime
@@ -130,7 +155,8 @@ endif()
 # End-to-end check of the client layer + sync jobs against a real tenant;
 # run with a bearer token in GRAPH_ACCESS_TOKEN.
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
-    add_executable(graphsmoketest
+    add_executable(
+        graphsmoketest
         tools/graphsmoketest.cpp
         graphsyncstateattribute.cpp
         jobs/graphbatchjob.cpp
@@ -139,8 +165,14 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
         jobs/graphfetchitempayloadjob.cpp
         ${graph_common_SRCS}
     )
-    target_include_directories(graphsmoketest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-    target_link_libraries(graphsmoketest
+    target_include_directories(
+        graphsmoketest
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    target_link_libraries(
+        graphsmoketest
         KPim6::AkonadiCore
         KPim6::AkonadiMime
         KF6::Mime
@@ -149,33 +181,38 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     )
 
     add_executable(akonadifetchtest tools/akonadifetchtest.cpp)
-    target_link_libraries(akonadifetchtest
+    target_link_libraries(
+        akonadifetchtest
         KPim6::AkonadiCore
         KF6::Mime
         Qt::Core
     )
 
     add_executable(sendtest tools/sendtest.cpp)
-    target_link_libraries(sendtest
+    target_link_libraries(
+        sendtest
         KF6::Mime
         Qt::Core
         Qt::DBus
     )
 
     add_executable(specialcheck tools/specialcheck.cpp)
-    target_link_libraries(specialcheck
+    target_link_libraries(
+        specialcheck
         KPim6::AkonadiCore
         KPim6::AkonadiMime
         Qt::Core
     )
 
-    add_executable(phase4check
+    add_executable(
+        phase4check
         tools/phase4check.cpp
         calendar/grapheventhandler.cpp
         contact/graphcontacthandler.cpp
         jobs/graphfetchpimitemsjob.cpp
     )
-    target_link_libraries(phase4check
+    target_link_libraries(
+        phase4check
         KPim6::AkonadiCore
         KF6::CalendarCore
         KF6::Contacts
@@ -183,12 +220,14 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
         graphclient
     )
 
-    add_executable(writetest
+    add_executable(
+        writetest
         tools/writetest.cpp
         calendar/grapheventhandler.cpp
         contact/graphcontacthandler.cpp
     )
-    target_link_libraries(writetest
+    target_link_libraries(
+        writetest
         KPim6::AkonadiCore
         KF6::CalendarCore
         KF6::Contacts
@@ -196,15 +235,27 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     )
 endif()
 
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/graphresource.desktop.cmake
-               ${CMAKE_CURRENT_BINARY_DIR}/graphresource.desktop)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/graphresource.desktop.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/graphresource.desktop
+)
 
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/graphresource.desktop
-        DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents")
-install(TARGETS akonadi_graph_resource ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/graphresource.desktop DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents")
+install(
+    TARGETS
+        akonadi_graph_resource
+        ${KDE_INSTALL_TARGETS_DEFAULT_ARGS}
+)
 
 if(HAVE_SEPARATE_MTA_RESOURCE)
-    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/graphmtaresource.desktop
-            DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents")
-    install(TARGETS akonadi_graphmta_resource ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+    install(
+        FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/graphmtaresource.desktop
+        DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents"
+    )
+    install(
+        TARGETS
+            akonadi_graphmta_resource
+            ${KDE_INSTALL_TARGETS_DEFAULT_ARGS}
+    )
 endif()

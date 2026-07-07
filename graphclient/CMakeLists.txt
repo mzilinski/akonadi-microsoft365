@@ -14,15 +14,22 @@ set(graphclient_SRCS
 
 add_library(graphclient STATIC ${graphclient_SRCS})
 
-target_link_libraries(graphclient
+target_link_libraries(
+    graphclient
     PUBLIC
         Qt::Core
-        Qt::Gui                # QDesktopServices (browser login)
+        Qt::Gui # QDesktopServices (browser login)
         Qt::Network
-        Qt::NetworkAuth        # QOAuth2AuthorizationCodeFlow
+        Qt::NetworkAuth # QOAuth2AuthorizationCodeFlow
         KPim6::AkonadiCore
         KF6::Mime
         Qt6Keychain::Qt6Keychain
 )
 target_include_directories(graphclient PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-set_property(TARGET graphclient PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(
+    TARGET
+        graphclient
+    PROPERTY
+        POSITION_INDEPENDENT_CODE
+            ON
+)
