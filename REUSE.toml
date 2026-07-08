@@ -10,8 +10,6 @@ path = [
     "graphconfig.json",
     "graphresource.kcfg",
     "graphsettingsbase.kcfgc",
-    "graphresource.desktop",
-    "graphmtaresource.desktop",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Malte Zilinski <malte@zilinski.eu>"

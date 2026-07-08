@@ -54,6 +54,9 @@ void GraphMtaResource::sendItem(const Akonadi::Item &item)
         return;
     }
 
+    // The key is an opaque correlation token for the sendMessage/messageSent D-Bus
+    // round trip. Item::id is always set and unique; the remoteId belongs to whichever
+    // resource owns the outbox folder and may be empty (unlike in the EWS MTA).
     const QString id = QString::number(item.id());
     mItemHash.insert(id, item);
 
