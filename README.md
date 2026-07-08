@@ -20,7 +20,8 @@ stand-alone against installed KDE PIM packages.
 ## Features
 
 - **Mail** — folder tree, message list and bodies (fetched on demand), read/unread and
-  flag changes, move, delete, create/rename/delete folders.
+  flag changes, move, delete, create/rename/delete folders, server-backed draft
+  editing (a saved draft replaces its server copy instead of duplicating it).
 - **Sending** — a separate transport agent (`akonadi_graphmta_resource`) hands outgoing
   MIME to the master resource over D-Bus; the sent copy is filed server-side (Graph does
   it on `/send`) with no local duplicate.
@@ -29,7 +30,10 @@ stand-alone against installed KDE PIM packages.
   can include them.
 - **Calendar** — events as KCalendarCore incidences (read + create/edit/delete);
   read-only calendars (Birthdays, Holidays, …) are marked read-only.
-- **Contacts** — as KContacts addressees (read + create/edit/delete).
+- **Contacts** — as KContacts addressees (read + create/edit/delete), including photos
+  and categories.
+- **Tasks** — Microsoft To Do lists as todo collections (read + create/edit/delete),
+  with reminders, priorities and recurrence.
 - **Incremental sync** — Graph delta queries for mail, calendar and contacts; only
   changes and tombstones are transferred after the first sync.
 - **OAuth2** — authorization code + PKCE (public client, no secret), refresh token in
@@ -77,7 +81,7 @@ server. Internally it is organised as clear layers rather than a dynamic plugin 
 ```text
 graphresource.{h,cpp}        Akonadi::ResourceBase — retrieve*/change-replay dispatch
 graphmtaresource.{h,cpp}     transport agent, forwards MIME to the master over D-Bus
-graphconfigdialog.{h,cpp}    account configuration dialog
+graphconfig.cpp              account configuration plugin (runs in the client process)
 graphsyncstateattribute.*    per-collection @odata.deltaLink storage
 graphclient/
   graphclient.{h,cpp}        QNetworkAccessManager + bearer token holder
@@ -108,6 +112,31 @@ code against a real tenant or a running Akonadi:
 | `writetest` | event/contact create/modify/delete through a running resource |
 | `specialcheck` | special-collection tagging on a running resource |
 | `akonadifetchtest` | on-demand mail payload retrieval through Akonadi |
+
+## Known limitations
+
+Deliberate gaps, roughly in the order users are likely to notice them:
+
+- **Global Address List (GAL)** — only the personal contacts folder syncs; looking up
+  other people in the organisation (`/users`, `/me/people`) is not implemented (it
+  would need an additional OAuth scope and a read-only collection).
+- **Shared and delegated mailboxes** — the resource only accesses the signed-in
+  user's own mailbox (`/me/…`).
+- **Task checklist items** — subtasks inside a Microsoft To Do task (`checklistItems`)
+  are not mapped; iCalendar has no direct equivalent. They are preserved on the server
+  when a task is edited from KDE.
+- **"Nth weekday" recurrences** — rules like *every first Monday*
+  (`relativeMonthly`/`relativeYearly`) are read as an approximation (monthly/yearly by
+  date) and never written; deliberately left out rather than written wrongly. Note
+  also that Microsoft To Do normalises counted repetitions (*10 times*) to
+  never-ending server-side; calendar events keep their count.
+- **Journal entries** (VJOURNAL) — no Graph equivalent, not synced.
+- **Contact birthdays are read-only** — writing them would make Exchange create
+  birthday calendar events on its own.
+- **Messages copied into the account arrive flagged as draft** — Graph's MIME
+  ingestion always creates drafts; the flag currently stays on the copy.
+- **No account wizard integration yet** — accounts are added via KMail's
+  *Add Custom Account…* plus the configure dialog (see above).
 
 ## License
 
