@@ -102,6 +102,8 @@ private Q_SLOTS:
     void delayedInit();
     // Config was changed from outside (graphconfig plugin in the client process).
     void reloadConfig();
+    // Keep the account root collection's name in sync with instance renames.
+    void updateRootCollectionName(const QString &name);
     void onAuthReady();
     void onAuthFailed(const QString &error);
 

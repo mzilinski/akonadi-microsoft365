@@ -91,6 +91,9 @@ GraphResource::GraphResource(const QString &id)
     // The config dialog runs as a plugin in the client process (graphconfig.cpp);
     // this fires after it saved the new settings.
     connect(this, &AgentBase::reloadConfiguration, this, &GraphResource::reloadConfig);
+    // The account root collection carries the instance name in client views; the folder
+    // delta never re-delivers it, so propagate renames explicitly.
+    connect(this, &AgentBase::agentNameChanged, this, &GraphResource::updateRootCollectionName);
 
     QMetaObject::invokeMethod(this, &GraphResource::delayedInit, Qt::QueuedConnection);
 }
@@ -153,6 +156,26 @@ void GraphResource::doSetOnline(bool online)
     } else if (mPollTimer) {
         mPollTimer->stop();
     }
+}
+
+void GraphResource::updateRootCollectionName(const QString &name)
+{
+    // Our only first-level collection is the account root; rename it to match.
+    auto fetch = new CollectionFetchJob(Collection::root(), CollectionFetchJob::FirstLevel, this);
+    fetch->fetchScope().setResource(identifier());
+    connect(fetch, &CollectionFetchJob::result, this, [name](KJob *job) {
+        if (job->error()) {
+            qCWarning(GRAPH_LOG) << "root collection fetch for rename failed:" << job->errorText();
+            return;
+        }
+        const auto cols = qobject_cast<CollectionFetchJob *>(job)->collections();
+        for (Collection col : cols) {
+            if (col.name() != name) {
+                col.setName(name);
+                new CollectionModifyJob(col);
+            }
+        }
+    });
 }
 
 void GraphResource::reloadConfig()
