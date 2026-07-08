@@ -565,8 +565,8 @@ void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partId
     // Mail: Graph cannot replace an existing message's MIME in place. For a draft the
     // updated MIME is the complete truth, so recreate it: POST the new MIME (which
     // Graph only accepts as a draft — exactly what we want), then delete the old copy.
-    if (mime == GraphMailHandler::mimeType() && partIdentifiers.contains(QByteArrayLiteral("PLD:RFC822"))
-        && item.hasPayload<std::shared_ptr<KMime::Message>>() && isDraftsCollection(item.parentCollection())) {
+    if (mime == GraphMailHandler::mimeType() && partIdentifiers.contains(QByteArrayLiteral("PLD:RFC822")) && item.hasPayload<std::shared_ptr<KMime::Message>>()
+        && isDraftsCollection(item.parentCollection())) {
         replaceDraft(item);
         return;
     }
