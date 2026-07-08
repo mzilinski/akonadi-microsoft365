@@ -678,6 +678,70 @@ void GraphResource::postPimItem(const Akonadi::Item &item, const QString &path, 
     req->start();
 }
 
+void GraphResource::movePimItem(const Item::List &items,
+                                int index,
+                                const std::shared_ptr<Item::List> &moved,
+                                const Collection &source,
+                                const Collection &destination)
+{
+    if (index >= items.size()) {
+        changesCommitted(*moved);
+        return;
+    }
+    const Item item = items.at(index);
+    const bool isTodo = item.mimeType() == GraphTodoHandler::mimeType();
+
+    QJsonObject body;
+    if (isTodo) {
+        const auto todo =
+            item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>() : nullptr;
+        if (!todo) {
+            cancelTask(i18n("Cannot move task %1: no payload", item.remoteId()));
+            return;
+        }
+        body = GraphTodoHandler::toJson(todo);
+    } else {
+        const auto event =
+            item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Event>() : nullptr;
+        if (!event) {
+            cancelTask(i18n("Cannot move event %1: no payload", item.remoteId()));
+            return;
+        }
+        body = GraphEventHandler::toJson(event);
+    }
+
+    auto create = new GraphRequest(mClient, this);
+    create->setMethod(GraphRequest::Post);
+    create->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks").arg(destination.remoteId())
+                           : QStringLiteral("/me/calendars/%1/events").arg(destination.remoteId()));
+    create->setBody(body);
+    connect(create, &KJob::result, this, [this, create, items, index, moved, source, destination, item, isTodo](KJob *job) {
+        if (job->error()) {
+            cancelTask(job->errorText());
+            return;
+        }
+        const QString newId = create->responseObject().value(QLatin1String("id")).toString();
+        auto del = new GraphRequest(mClient, this);
+        del->setMethod(GraphRequest::Delete);
+        del->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(source.remoteId(), item.remoteId())
+                            : QStringLiteral("/me/events/%1").arg(item.remoteId()));
+        connect(del, &KJob::result, this, [this, del, items, index, moved, source, destination, item, newId](KJob *dj) {
+            if (dj->error() && del->httpStatus() != 404) {
+                cancelTask(dj->errorText());
+                return;
+            }
+            Item movedItem(item);
+            if (!newId.isEmpty()) {
+                movedItem.setRemoteId(newId);
+            }
+            moved->append(movedItem);
+            movePimItem(items, index + 1, moved, source, destination);
+        });
+        del->start();
+    });
+    create->start();
+}
+
 void GraphResource::putContactPhotoThenCommit(const Akonadi::Item &item)
 {
     if (item.mimeType() != GraphContactHandler::mimeType() || !item.hasPayload<KContacts::Addressee>() || item.remoteId().isEmpty()) {
@@ -739,8 +803,22 @@ void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &
     req->start();
 }
 
-void GraphResource::itemsMoved(const Item::List &items, [[maybe_unused]] const Collection &source, const Collection &destination)
+void GraphResource::itemsMoved(const Item::List &items, const Collection &source, const Collection &destination)
 {
+    const QString mime = items.isEmpty() ? QString() : items.first().mimeType();
+    if (mime == GraphEventHandler::mimeType() || mime == GraphTodoHandler::mimeType()) {
+        // Graph has no move API for events or tasks — recreate in the destination and
+        // delete the original (Outlook on the web does the same). Attendees are not
+        // part of the write mapping, so recreating never sends out invitations.
+        movePimItem(items, 0, std::make_shared<Item::List>(), source, destination);
+        return;
+    }
+    if (mime == GraphContactHandler::mimeType()) {
+        // Only the default contacts folder is modelled, so this should be unreachable.
+        cancelTask(i18n("Moving contacts between folders is not supported"));
+        return;
+    }
+
     QList<GraphBatchJob::Call> calls;
     calls.reserve(items.size());
     QJsonObject body;

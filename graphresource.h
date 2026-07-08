@@ -18,6 +18,8 @@
 
 #include <QJsonObject>
 
+#include <memory>
+
 class GraphSettings;
 class GraphOAuth;
 class QTimer;
@@ -129,6 +131,13 @@ private:
     // Contact photos live on a separate endpoint; upload after the JSON write, then commit.
     void putContactPhotoThenCommit(const Akonadi::Item &item);
     void patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body);
+    // Graph has no move API for events/tasks: recreate in the destination, delete the
+    // original, then continue with the next item (sequential; commits when done).
+    void movePimItem(const Akonadi::Item::List &items,
+                     int index,
+                     const std::shared_ptr<Akonadi::Item::List> &moved,
+                     const Akonadi::Collection &source,
+                     const Akonadi::Collection &destination);
 
     // Per-collection delta state (the @odata.deltaLink) is stored as a collection
     // attribute, exactly like EwsSyncStateAttribute.
