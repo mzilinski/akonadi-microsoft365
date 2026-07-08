@@ -123,6 +123,8 @@ private:
     void reconcileSentItem(const Akonadi::Item &item, const QString &messageId);
     // Calendar/contact change replay helpers.
     void postPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body);
+    // Contact photos live on a separate endpoint; upload after the JSON write, then commit.
+    void putContactPhotoThenCommit(const Akonadi::Item &item);
     void patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body);
 
     // Per-collection delta state (the @odata.deltaLink) is stored as a collection

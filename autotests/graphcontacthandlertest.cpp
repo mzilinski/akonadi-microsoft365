@@ -54,6 +54,7 @@ QJsonObject sampleContact()
     json.insert(QStringLiteral("homeAddress"), home);
 
     json.insert(QStringLiteral("birthday"), QStringLiteral("1980-05-15T00:00:00Z"));
+    json.insert(QStringLiteral("categories"), QJsonArray{QStringLiteral("Familie"), QStringLiteral("Verein")});
     return json;
 }
 } // namespace
@@ -108,6 +109,12 @@ private Q_SLOTS:
         QCOMPARE(a.birthday().date(), QDate(1980, 5, 15));
     }
 
+    void shouldMapCategories()
+    {
+        const Addressee a = GraphContactHandlerTest::addressee();
+        QCOMPARE(a.categories(), QStringList({QStringLiteral("Familie"), QStringLiteral("Verein")}));
+    }
+
     void shouldRoundTripThroughJson()
     {
         const QJsonObject json = sampleContact();
@@ -122,6 +129,7 @@ private Q_SLOTS:
         QCOMPARE(back.value(QLatin1String("homePhones")), json.value(QLatin1String("homePhones")));
         QCOMPARE(back.value(QLatin1String("mobilePhone")), json.value(QLatin1String("mobilePhone")));
         QCOMPARE(back.value(QLatin1String("homeAddress")), json.value(QLatin1String("homeAddress")));
+        QCOMPARE(back.value(QLatin1String("categories")), json.value(QLatin1String("categories")));
     }
 
     void shouldUseVCardMimeType()

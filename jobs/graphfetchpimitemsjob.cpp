@@ -10,6 +10,7 @@
 #include "graphclient/graphrequest.h"
 
 #include <KCalendarCore/Event>
+#include <KContacts/Picture>
 #include <QJsonArray>
 #include <QJsonObject>
 
@@ -128,7 +129,70 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             mChanged.append(item);
         }
     }
+    if (mType == Contacts && !mChanged.isEmpty()) {
+        fetchPhotos(); // photos are a separate endpoint, not part of the contact JSON
+        return;
+    }
     emitResult();
+}
+
+void GraphFetchPimItemsJob::fetchPhotos()
+{
+    // GET /me/contacts/{id}/photo/$value for each changed contact, bundled via /$batch
+    // (20 sub-requests per call, like the mail payload path). 404 = contact has no photo.
+    constexpr int batchSize = 20;
+    const int first = mPhotoIndex;
+    const int last = qMin(mPhotoIndex + batchSize, int(mChanged.size()));
+
+    QJsonArray requests;
+    for (int i = first; i < last; ++i) {
+        QJsonObject sub;
+        sub.insert(QStringLiteral("id"), QString::number(i));
+        sub.insert(QStringLiteral("method"), QStringLiteral("GET"));
+        sub.insert(QStringLiteral("url"), QStringLiteral("/me/contacts/%1/photo/$value").arg(mChanged.at(i).remoteId()));
+        requests.append(sub);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("requests"), requests);
+
+    auto req = new GraphRequest(mClient, this);
+    req->setMethod(GraphRequest::Post);
+    req->setPath(QStringLiteral("/$batch"));
+    req->setBody(body);
+    connect(req, &KJob::result, this, [this, req, last](KJob *job) {
+        if (job->error()) {
+            emitResult(); // photos are decoration: deliver the contacts without them
+            return;
+        }
+        const QJsonArray responses = req->responseObject().value(QLatin1String("responses")).toArray();
+        for (const auto &r : responses) {
+            const QJsonObject resp = r.toObject();
+            const int idx = resp.value(QLatin1String("id")).toString().toInt();
+            const int status = resp.value(QLatin1String("status")).toInt();
+            if (idx < 0 || idx >= mChanged.size() || status != 200) {
+                continue;
+            }
+            // /$value in a batch comes back as a base64-encoded string body.
+            const QByteArray data = QByteArray::fromBase64(resp.value(QLatin1String("body")).toString().toLatin1());
+            if (data.isEmpty()) {
+                continue;
+            }
+            QString type = resp.value(QLatin1String("headers")).toObject().value(QLatin1String("Content-Type")).toString();
+            type = type.startsWith(QLatin1String("image/")) ? type.mid(6) : QStringLiteral("jpeg");
+            auto addressee = mChanged.at(idx).payload<KContacts::Addressee>();
+            KContacts::Picture photo;
+            photo.setRawData(data, type);
+            addressee.setPhoto(photo);
+            mChanged[idx].setPayload(addressee);
+        }
+        mPhotoIndex = last;
+        if (mPhotoIndex < mChanged.size()) {
+            fetchPhotos();
+        } else {
+            emitResult();
+        }
+    });
+    req->start();
 }
 
 Collection GraphFetchPimItemsJob::collection() const

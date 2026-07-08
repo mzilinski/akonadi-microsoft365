@@ -105,6 +105,19 @@ KContacts::Addressee toAddressee(const QJsonObject &json)
             a.setBirthday(bd.date());
         }
     }
+
+    QStringList categories;
+    const QJsonArray cats = json.value(QLatin1String("categories")).toArray();
+    for (const auto &c : cats) {
+        const QString category = c.toString();
+        if (!category.isEmpty()) {
+            categories << category;
+        }
+    }
+    a.setCategories(categories);
+
+    // The photo is not part of the contact resource; GraphFetchPimItemsJob fetches
+    // it separately from /me/contacts/{id}/photo/$value and sets it on the Addressee.
     return a;
 }
 
@@ -157,6 +170,8 @@ QJsonObject toJson(const KContacts::Addressee &a)
     if (!homeAddr.isEmpty()) {
         json.insert(QStringLiteral("homeAddress"), addressToJson(homeAddr));
     }
+
+    json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(a.categories()));
     return json;
 }
 }

@@ -89,6 +89,9 @@ void GraphRequest::issue(const QUrl &url)
     case Post:
         reply = nam->post(req, mBody);
         break;
+    case Put:
+        reply = nam->put(req, mBody);
+        break;
     case Patch:
         reply = nam->sendCustomRequest(req, "PATCH", mBody);
         break;

@@ -34,6 +34,7 @@
 #include <Akonadi/SpecialMailCollections>
 #include <KLocalizedString>
 #include <KMime/Message>
+#include <QBuffer>
 #include <QTimer>
 #include <QUrl>
 
@@ -493,7 +494,7 @@ void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path,
         if (job->error()) {
             cancelTask(job->errorText());
         } else {
-            changeCommitted(item);
+            putContactPhotoThenCommit(item);
         }
     });
     req->start();
@@ -576,7 +577,43 @@ void GraphResource::postPimItem(const Akonadi::Item &item, const QString &path, 
         }
         Item newItem(item);
         newItem.setRemoteId(req->responseObject().value(QLatin1String("id")).toString());
-        changeCommitted(newItem);
+        putContactPhotoThenCommit(newItem);
+    });
+    req->start();
+}
+
+void GraphResource::putContactPhotoThenCommit(const Akonadi::Item &item)
+{
+    if (item.mimeType() != GraphContactHandler::mimeType() || !item.hasPayload<KContacts::Addressee>() || item.remoteId().isEmpty()) {
+        changeCommitted(item);
+        return;
+    }
+    const KContacts::Picture photo = item.payload<KContacts::Addressee>().photo();
+    QByteArray data = photo.rawData();
+    QByteArray contentType = "image/" + (photo.type().isEmpty() ? QByteArray("jpeg") : photo.type().toUtf8());
+    if (data.isEmpty() && !photo.data().isNull()) {
+        // Editor-set photos may carry only a QImage; encode it for the upload.
+        QBuffer buffer(&data);
+        buffer.open(QIODevice::WriteOnly);
+        photo.data().save(&buffer, "PNG");
+        contentType = QByteArrayLiteral("image/png");
+    }
+    if (data.isEmpty()) {
+        // No local photo. Deliberately do not delete a server-side one.
+        changeCommitted(item);
+        return;
+    }
+    auto req = new GraphRequest(mClient, this);
+    req->setMethod(GraphRequest::Put);
+    req->setPath(QStringLiteral("/me/contacts/%1/photo/$value").arg(item.remoteId()));
+    req->setRawBody(data, contentType);
+    connect(req, &KJob::result, this, [this, item](KJob *job) {
+        if (job->error()) {
+            // Best effort: the contact itself is saved; a failed photo upload
+            // should not fail the change replay.
+            qCWarning(GRAPH_LOG) << "contact photo upload failed for" << item.remoteId() << ":" << job->errorText();
+        }
+        changeCommitted(item);
     });
     req->start();
 }

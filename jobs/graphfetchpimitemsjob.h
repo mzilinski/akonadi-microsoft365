@@ -43,6 +43,7 @@ private Q_SLOTS:
 private:
     void startDelta(const QString &absoluteUrlOrPath, bool isAbsolute);
     void resolveContactsFolderThenStart();
+    void fetchPhotos();
 
     GraphClient &mClient;
     Akonadi::Collection mCollection;
@@ -50,4 +51,5 @@ private:
     QString mDeltaLink;
     Akonadi::Item::List mChanged;
     Akonadi::Item::List mRemoved;
+    int mPhotoIndex = 0; // next contact whose photo has not been requested yet
 };
