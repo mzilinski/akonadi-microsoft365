@@ -362,11 +362,23 @@ void GraphResource::fetchFoldersJobFinished(KJob *job)
     qCDebug(GRAPH_LOG) << "folders fetched, incremental:" << fj->isIncremental() << "all:" << fj->allCollections().size()
                        << "changed:" << fj->changedCollections().size() << "removed:" << fj->removedCollections().size();
 
+    // Parent the calendar/contact/todo collections under the account root. They are
+    // re-fetched fresh on every tree sync, so deliver them as changed in the
+    // incremental case too — otherwise a newly created list would never show up.
+    Collection::List extra;
+    for (Collection col : std::as_const(mExtraCollections)) {
+        Collection parent;
+        parent.setRemoteId(mRootCollection.remoteId());
+        col.setParentCollection(parent);
+        extra.append(col);
+    }
+
     if (fj->isIncremental()) {
         Collection::List changed = fj->changedCollections();
         for (Collection &col : changed) {
             applySpecialAttributes(col);
         }
+        changed.append(extra);
         collectionsRetrievedIncremental(changed, fj->removedCollections());
     } else {
         Collection::List cols = fj->allCollections();
@@ -374,13 +386,7 @@ void GraphResource::fetchFoldersJobFinished(KJob *job)
             applySpecialAttributes(col);
         }
         cols.prepend(mRootCollection);
-        // Parent the calendar/contact collections under the account root and add them.
-        for (Collection col : std::as_const(mExtraCollections)) {
-            Collection parent;
-            parent.setRemoteId(mRootCollection.remoteId());
-            col.setParentCollection(parent);
-            cols.append(col);
-        }
+        cols.append(extra);
         collectionsRetrieved(cols);
     }
 }
