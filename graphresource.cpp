@@ -58,6 +58,7 @@ const SpecialFolder kSpecialFolders[] = {
     {"junkemail", SpecialMailCollections::Spam, "spam", "mail-mark-junk"},
     {"outbox", SpecialMailCollections::Outbox, "outbox", "mail-folder-outbox"},
 };
+constexpr int kMillisecondsPerMinute = 60 * 1000;
 
 // Graph uses a different endpoint family per collection type; mail is the default.
 enum class CollectionKind {
@@ -173,7 +174,7 @@ void GraphResource::onAuthReady()
         });
     }
     if (mSettings->pollInterval() > 0) {
-        mPollTimer->start(mSettings->pollInterval() * 60 * 1000);
+        mPollTimer->start(mSettings->pollInterval() * kMillisecondsPerMinute);
     }
 }
 
@@ -237,7 +238,7 @@ void GraphResource::reloadConfig()
         setUpAuth();
     } else if (mPollTimer) {
         if (mSettings->pollInterval() > 0) {
-            mPollTimer->start(mSettings->pollInterval() * 60 * 1000);
+            mPollTimer->start(mSettings->pollInterval() * kMillisecondsPerMinute);
         } else {
             mPollTimer->stop();
         }

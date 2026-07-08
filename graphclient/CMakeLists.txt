@@ -12,6 +12,16 @@ set(graphclient_SRCS
     auth/graphoauth.h
 )
 
+# Own category: the client layer is linked into several targets, so it cannot share
+# the resource's graph_debug.cpp without duplicating the category symbol.
+ecm_qt_declare_logging_category(graphclient_SRCS
+    HEADER graphclient_debug.h
+    IDENTIFIER GRAPHCLIENT_LOG
+    CATEGORY_NAME org.kde.pim.graph.client
+    DESCRIPTION "graph client layer (kdepim-runtime)"
+    EXPORT KDEPIMRUNTIME
+)
+
 add_library(graphclient STATIC ${graphclient_SRCS})
 
 target_link_libraries(
@@ -27,6 +37,7 @@ target_link_libraries(
         Qt6Keychain::Qt6Keychain
 )
 target_include_directories(graphclient PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(graphclient PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 set_property(
     TARGET
         graphclient

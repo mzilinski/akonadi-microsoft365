@@ -5,6 +5,8 @@
 
 #include "graphoauth.h"
 
+#include "graphclient_debug.h"
+
 #include <KLocalizedString>
 
 #include <QDateTime>
@@ -80,7 +82,7 @@ void GraphOAuth::setUpFlow()
     });
 
     connect(mFlow.get(), &QOAuth2AuthorizationCodeFlow::authorizeWithBrowser, this, [](const QUrl &url) {
-        qInfo() << "GraphOAuth: opening browser for login:" << url.toString();
+        qCInfo(GRAPHCLIENT_LOG) << "opening browser for login:" << url.toString();
         QDesktopServices::openUrl(url);
     });
     connect(mFlow.get(), &QAbstractOAuth::granted, this, &GraphOAuth::onGranted);

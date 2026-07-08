@@ -37,5 +37,6 @@ private:
     GraphClient &mClient;
     Akonadi::Collection mCollection;
     QString mDeltaLink;
-    Akonadi::Item::List mChanged, mRemoved;
+    Akonadi::Item::List mChanged;
+    Akonadi::Item::List mRemoved;
 };

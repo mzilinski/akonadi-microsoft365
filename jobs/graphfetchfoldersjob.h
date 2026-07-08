@@ -42,5 +42,7 @@ private:
     Akonadi::Collection mRoot;
     QString mDeltaLink;
     bool mIncremental;
-    Akonadi::Collection::List mAll, mChanged, mRemoved;
+    Akonadi::Collection::List mAll;
+    Akonadi::Collection::List mChanged;
+    Akonadi::Collection::List mRemoved;
 };
