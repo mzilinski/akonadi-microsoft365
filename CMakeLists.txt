@@ -70,6 +70,7 @@ set(graphresource_SRCS
     mail/graphmailhandler.cpp
     calendar/grapheventhandler.cpp
     contact/graphcontacthandler.cpp
+    todo/graphtodohandler.cpp
     jobs/graphbatchjob.cpp
     jobs/graphfetchfoldersjob.cpp
     jobs/graphfetchitemsjob.cpp
@@ -80,6 +81,7 @@ set(graphresource_SRCS
     mail/graphmailhandler.h
     calendar/grapheventhandler.h
     contact/graphcontacthandler.h
+    todo/graphtodohandler.h
     jobs/graphbatchjob.h
     jobs/graphfetchfoldersjob.h
     jobs/graphfetchitemsjob.h
@@ -223,6 +225,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
         tools/phase4check.cpp
         calendar/grapheventhandler.cpp
         contact/graphcontacthandler.cpp
+        todo/graphtodohandler.cpp
         jobs/graphfetchpimitemsjob.cpp
     )
     target_link_libraries(

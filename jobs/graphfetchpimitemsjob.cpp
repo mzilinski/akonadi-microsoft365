@@ -8,6 +8,7 @@
 #include "calendar/grapheventhandler.h"
 #include "contact/graphcontacthandler.h"
 #include "graphclient/graphrequest.h"
+#include "todo/graphtodohandler.h"
 
 #include <KCalendarCore/Event>
 #include <KContacts/Picture>
@@ -42,6 +43,8 @@ void GraphFetchPimItemsJob::start()
                                   "organizer,attendees,categories,showAs,sensitivity,recurrence")
                        .arg(mCollection.remoteId()),
                    false);
+    } else if (mType == Todos) {
+        startDelta(QStringLiteral("/me/todo/lists/%1/tasks/delta").arg(mCollection.remoteId()), false);
     } else {
         resolveContactsFolderThenStart();
     }
@@ -120,6 +123,16 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             item.setRemoteId(id);
             item.setParentCollection(mCollection);
             item.setPayload<KCalendarCore::Incidence::Ptr>(event);
+            mChanged.append(item);
+        } else if (mType == Todos) {
+            auto todo = GraphTodoHandler::toTodo(obj);
+            if (!todo) {
+                continue;
+            }
+            Item item(GraphTodoHandler::mimeType());
+            item.setRemoteId(id);
+            item.setParentCollection(mCollection);
+            item.setPayload<KCalendarCore::Incidence::Ptr>(todo);
             mChanged.append(item);
         } else {
             Item item(GraphContactHandler::mimeType());

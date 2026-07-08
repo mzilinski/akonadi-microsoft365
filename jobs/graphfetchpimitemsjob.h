@@ -25,7 +25,8 @@ class GraphFetchPimItemsJob : public KJob
 public:
     enum Type {
         Events,
-        Contacts
+        Contacts,
+        Todos
     };
 
     GraphFetchPimItemsJob(GraphClient &client, const Akonadi::Collection &collection, Type type, const QString &deltaLink, QObject *parent = nullptr);

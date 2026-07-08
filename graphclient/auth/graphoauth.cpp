@@ -57,6 +57,7 @@ QSet<QByteArray> GraphOAuth::graphScopes()
         QByteArrayLiteral("https://graph.microsoft.com/Mail.Send"),
         QByteArrayLiteral("https://graph.microsoft.com/Calendars.ReadWrite"),
         QByteArrayLiteral("https://graph.microsoft.com/Contacts.ReadWrite"),
+        QByteArrayLiteral("https://graph.microsoft.com/Tasks.ReadWrite"),
     };
 }
 

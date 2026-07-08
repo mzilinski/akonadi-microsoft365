@@ -117,7 +117,8 @@ private:
     void reconfigureClient();
 
     void fetchFolderTree();
-    void fetchExtraCollections(); // calendars + contacts
+    void fetchExtraCollections(); // calendars + contacts + todo lists
+    void fetchTodoListCollections();
     // Tag Inbox/Sent/Drafts/Trash/Junk/Outbox as Akonadi special collections so KMail
     // and the unified-mailbox agent treat them correctly. Applied inline during sync.
     void applySpecialAttributes(Akonadi::Collection &col);

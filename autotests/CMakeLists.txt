@@ -20,6 +20,7 @@ macro(add_graph_test _name)
 endmacro()
 
 add_graph_test(grapheventhandlertest grapheventhandlertest.cpp ../calendar/grapheventhandler.cpp)
+add_graph_test(graphtodohandlertest graphtodohandlertest.cpp ../todo/graphtodohandler.cpp ../calendar/grapheventhandler.cpp)
 add_graph_test(graphcontacthandlertest graphcontacthandlertest.cpp ../contact/graphcontacthandler.cpp)
 add_graph_test(graphmailhandlertest graphmailhandlertest.cpp ../mail/graphmailhandler.cpp)
 add_graph_test(graphsyncstateattributetest graphsyncstateattributetest.cpp ../graphsyncstateattribute.cpp)

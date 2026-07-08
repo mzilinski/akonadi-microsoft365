@@ -51,7 +51,11 @@ QJsonObject utcDateTime(const QDateTime &dt, bool allDay)
     return o;
 }
 
-void applyRecurrence(const QJsonObject &recurrence, const Event::Ptr &event)
+} // namespace
+
+namespace GraphEventHandler
+{
+void applyRecurrence(const QJsonObject &recurrence, const Incidence::Ptr &incidence)
 {
     const QJsonObject pattern = recurrence.value(QLatin1String("pattern")).toObject();
     const QJsonObject range = recurrence.value(QLatin1String("range")).toObject();
@@ -60,7 +64,7 @@ void applyRecurrence(const QJsonObject &recurrence, const Event::Ptr &event)
     }
     const QString type = pattern.value(QLatin1String("type")).toString();
     const int interval = pattern.value(QLatin1String("interval")).toInt(1);
-    Recurrence *r = event->recurrence();
+    Recurrence *r = incidence->recurrence();
 
     if (type == QLatin1String("daily")) {
         r->setDaily(interval);

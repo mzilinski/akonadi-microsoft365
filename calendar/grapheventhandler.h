@@ -24,4 +24,7 @@ namespace GraphEventHandler
 
 /// KCalendarCore::Event -> Graph event JSON (for create/update).
 [[nodiscard]] QJsonObject toJson(const KCalendarCore::Event::Ptr &event);
+
+/// Apply a Graph patternedRecurrence to an incidence (shared with the todo handler).
+void applyRecurrence(const QJsonObject &recurrence, const KCalendarCore::Incidence::Ptr &incidence);
 }

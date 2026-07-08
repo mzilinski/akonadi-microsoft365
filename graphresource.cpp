@@ -20,6 +20,7 @@
 #include "jobs/graphfetchitemsjob.h"
 #include "jobs/graphfetchpimitemsjob.h"
 #include "mail/graphmailhandler.h"
+#include "todo/graphtodohandler.h"
 
 #include <KContacts/Addressee>
 
@@ -281,7 +282,36 @@ void GraphResource::fetchExtraCollections()
         contacts.attribute<EntityDisplayAttribute>(Collection::AddIfMissing)->setIconName(QStringLiteral("view-pim-contacts"));
         mExtraCollections.append(contacts);
 
-        qCDebug(GRAPH_LOG) << "resolved" << mExtraCollections.size() << "calendar/contact collections";
+        fetchTodoListCollections();
+    });
+    req->start();
+}
+
+void GraphResource::fetchTodoListCollections()
+{
+    // Task lists (Microsoft To Do): GET /me/todo/lists -> one collection per list.
+    auto req = new GraphRequest(mClient, this);
+    req->setPath(QStringLiteral("/me/todo/lists"));
+    connect(req, &KJob::result, this, [this, req](KJob *job) {
+        if (!job->error()) {
+            for (const auto &v : req->aggregatedValue()) {
+                const QJsonObject list = v.toObject();
+                const QString id = list.value(QLatin1String("id")).toString();
+                if (id.isEmpty()) {
+                    continue;
+                }
+                Collection col;
+                col.setRemoteId(id);
+                col.setName(list.value(QLatin1String("displayName")).toString());
+                col.setContentMimeTypes({GraphTodoHandler::mimeType()});
+                col.setRights(Collection::AllRights);
+                col.attribute<EntityDisplayAttribute>(Collection::AddIfMissing)->setIconName(QStringLiteral("view-calendar-tasks"));
+                mExtraCollections.append(col);
+            }
+        } else {
+            qCWarning(GRAPH_LOG) << "todo list fetch failed:" << job->errorText();
+        }
+        qCDebug(GRAPH_LOG) << "resolved" << mExtraCollections.size() << "calendar/contact/todo collections";
         fetchFolderTree();
     });
     req->start();
@@ -358,9 +388,12 @@ void GraphResource::fetchFoldersJobFinished(KJob *job)
 void GraphResource::retrieveItems(const Akonadi::Collection &collection)
 {
     const QStringList mimeTypes = collection.contentMimeTypes();
-    if (mimeTypes.contains(GraphEventHandler::mimeType()) || mimeTypes.contains(GraphContactHandler::mimeType())) {
-        // Calendar/contacts: delta change tracking, payloads delivered whole.
-        const auto type = mimeTypes.contains(GraphEventHandler::mimeType()) ? GraphFetchPimItemsJob::Events : GraphFetchPimItemsJob::Contacts;
+    if (mimeTypes.contains(GraphEventHandler::mimeType()) || mimeTypes.contains(GraphContactHandler::mimeType())
+        || mimeTypes.contains(GraphTodoHandler::mimeType())) {
+        // Calendar/contacts/tasks: delta change tracking, payloads delivered whole.
+        const auto type = mimeTypes.contains(GraphEventHandler::mimeType()) ? GraphFetchPimItemsJob::Events
+            : mimeTypes.contains(GraphTodoHandler::mimeType())              ? GraphFetchPimItemsJob::Todos
+                                                                            : GraphFetchPimItemsJob::Contacts;
         auto job = new GraphFetchPimItemsJob(mClient, collection, type, collectionDeltaLink(collection), this);
         connect(job, &KJob::result, this, &GraphResource::fetchPimItemsJobFinished);
         job->start();
@@ -407,29 +440,41 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unus
     // still asks (cache miss), the items already carry their payload, so just return them.
     if (!items.isEmpty()) {
         const QString mime = items.first().mimeType();
-        if (mime == GraphEventHandler::mimeType() || mime == GraphContactHandler::mimeType()) {
+        if (mime == GraphEventHandler::mimeType() || mime == GraphContactHandler::mimeType() || mime == GraphTodoHandler::mimeType()) {
             if (items.first().hasPayload()) {
                 itemsRetrieved(items);
                 return true;
             }
-            // Cache miss: re-fetch each requested event/contact individually and rebuild
-            // its payload. (Rare — payloads are normally cached from the delta sync.)
+            // Cache miss: re-fetch each requested event/contact/task individually and
+            // rebuild its payload. (Rare — payloads are normally cached from the delta sync.)
             const bool isEvent = mime == GraphEventHandler::mimeType();
+            const bool isTodo = mime == GraphTodoHandler::mimeType();
             auto pending = std::make_shared<Item::List>();
             auto remaining = std::make_shared<int>(items.size());
             for (const Item &item : items) {
                 auto req = new GraphRequest(mClient, this);
-                req->setPath(isEvent ? QStringLiteral("/me/events/%1").arg(item.remoteId()) : QStringLiteral("/me/contacts/%1").arg(item.remoteId()));
+                if (isEvent) {
+                    req->setPath(QStringLiteral("/me/events/%1").arg(item.remoteId()));
+                } else if (isTodo) {
+                    req->setPath(QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(item.parentCollection().remoteId(), item.remoteId()));
+                } else {
+                    req->setPath(QStringLiteral("/me/contacts/%1").arg(item.remoteId()));
+                }
                 if (isEvent) {
                     req->addHeader("Prefer", "outlook.timezone=\"UTC\"");
                 }
-                connect(req, &KJob::result, this, [this, item, req, isEvent, pending, remaining](KJob *j) {
+                connect(req, &KJob::result, this, [this, item, req, isEvent, isTodo, pending, remaining](KJob *j) {
                     if (!j->error()) {
                         Item filled(item);
                         if (isEvent) {
                             auto ev = GraphEventHandler::toEvent(req->responseObject());
                             if (ev) {
                                 filled.setPayload<KCalendarCore::Incidence::Ptr>(ev);
+                            }
+                        } else if (isTodo) {
+                            auto todo = GraphTodoHandler::toTodo(req->responseObject());
+                            if (todo) {
+                                filled.setPayload<KCalendarCore::Incidence::Ptr>(todo);
                             }
                         } else {
                             filled.setPayload<KContacts::Addressee>(GraphContactHandler::toAddressee(req->responseObject()));
@@ -502,6 +547,14 @@ void GraphResource::itemChanged(const Item &item, [[maybe_unused]] const QSet<QB
     } else if (mime == GraphContactHandler::mimeType() && item.hasPayload<KContacts::Addressee>()) {
         patchPimItem(item, QStringLiteral("/me/contacts/%1").arg(item.remoteId()), GraphContactHandler::toJson(item.payload<KContacts::Addressee>()));
         return;
+    } else if (mime == GraphTodoHandler::mimeType() && item.hasPayload<KCalendarCore::Incidence::Ptr>()) {
+        auto todo = item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>();
+        if (todo) {
+            patchPimItem(item,
+                         QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(item.parentCollection().remoteId(), item.remoteId()),
+                         GraphTodoHandler::toJson(todo));
+            return;
+        }
     }
     // Mail: Graph cannot replace an existing message's MIME in place. Accept locally.
     changeProcessed();
@@ -547,6 +600,20 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
         if (item.hasPayload<KContacts::Addressee>()) {
             postPimItem(item, QStringLiteral("/me/contacts"), GraphContactHandler::toJson(item.payload<KContacts::Addressee>()));
         } else {
+            changeProcessed();
+        }
+        return;
+    }
+    // Task -> POST /me/todo/lists/{list}/tasks
+    if (mime == GraphTodoHandler::mimeType()) {
+        KCalendarCore::Todo::Ptr todo;
+        if (item.hasPayload<KCalendarCore::Incidence::Ptr>()) {
+            todo = item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>();
+        }
+        if (todo) {
+            postPimItem(item, QStringLiteral("/me/todo/lists/%1/tasks").arg(collection.remoteId()), GraphTodoHandler::toJson(todo));
+        } else {
+            qCWarning(GRAPH_LOG) << "todo itemAdded without usable payload";
             changeProcessed();
         }
         return;
@@ -697,7 +764,7 @@ void GraphResource::itemsMoved(const Item::List &items, [[maybe_unused]] const C
 
 void GraphResource::itemsRemoved(const Item::List &items)
 {
-    // Calendar/contact deletes hit different endpoints (and never carry mail flags).
+    // Calendar/contact/task deletes hit different endpoints (and never carry mail flags).
     const QString mime = items.isEmpty() ? QString() : items.first().mimeType();
     QString pimBase;
     if (mime == GraphEventHandler::mimeType()) {
@@ -705,10 +772,13 @@ void GraphResource::itemsRemoved(const Item::List &items)
     } else if (mime == GraphContactHandler::mimeType()) {
         pimBase = QStringLiteral("/me/contacts/%1");
     }
-    if (!pimBase.isEmpty()) {
+    if (!pimBase.isEmpty() || mime == GraphTodoHandler::mimeType()) {
         QList<GraphBatchJob::Call> calls;
         for (const Item &item : items) {
-            calls.append({GraphRequest::Delete, pimBase.arg(item.remoteId()), {}});
+            // Tasks are addressed through their list; the parent collection carries it.
+            const QString path = pimBase.isEmpty() ? QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(item.parentCollection().remoteId(), item.remoteId())
+                                                   : pimBase.arg(item.remoteId());
+            calls.append({GraphRequest::Delete, path, {}});
         }
         auto job = new GraphBatchJob(mClient, calls, this);
         job->setIgnoreNotFound(true);
