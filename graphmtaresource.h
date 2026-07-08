@@ -46,7 +46,7 @@ private Q_SLOTS:
     void messageSent(const QString &id, const QString &error);
 
 private:
-    bool connectToMasterResource();
+    [[nodiscard]] bool connectToMasterResource();
 
     OrgKdeAkonadiGraphResourceInterface *mGraphResource = nullptr;
     QHash<QString, Akonadi::Item> mItemHash; // remoteId -> item, awaiting messageSent

@@ -14,8 +14,8 @@
 namespace GraphContactHandler
 {
 /// Akonadi item content mime type for contacts.
-QString mimeType();
+[[nodiscard]] QString mimeType();
 
-KContacts::Addressee toAddressee(const QJsonObject &json);
-QJsonObject toJson(const KContacts::Addressee &addressee);
+[[nodiscard]] KContacts::Addressee toAddressee(const QJsonObject &json);
+[[nodiscard]] QJsonObject toJson(const KContacts::Addressee &addressee);
 }

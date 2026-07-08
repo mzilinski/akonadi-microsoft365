@@ -161,6 +161,8 @@ void GraphResource::configure(WId windowId)
 
     QPointer<GraphConfigDialog> dlg = new GraphConfigDialog(mSettings.data(), name());
     if (windowId) {
+        // Force a native window so windowHandle() exists before show(); otherwise the
+        // dialog cannot be made transient for the caller's window (given only as a WId).
         dlg->setAttribute(Qt::WA_NativeWindow, true);
         if (dlg->windowHandle()) {
             dlg->windowHandle()->setTransientParent(QWindow::fromWinId(windowId));
@@ -198,7 +200,7 @@ void GraphResource::retrieveCollections()
         for (const auto &sf : kSpecialFolders) {
             calls.append({GraphRequest::Get, QStringLiteral("/me/mailFolders/%1?$select=id").arg(QLatin1String(sf.wellKnownName)), {}});
         }
-        auto *job = new GraphBatchJob(mClient, calls, this);
+        auto job = new GraphBatchJob(mClient, calls, this);
         job->setIgnoreNotFound(true); // a mailbox may lack e.g. a real Outbox folder
         connect(job, &KJob::result, this, [this, job](KJob *kjob) {
             if (!kjob->error()) {
@@ -228,7 +230,7 @@ void GraphResource::fetchExtraCollections()
 {
     // Calendars + a default contacts collection. Built once; delivered alongside the
     // mail folders on a full sync. Content mime types drive the retrieveItems dispatch.
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/calendars?$select=id,name,canEdit,isDefaultCalendar"));
     connect(req, &KJob::result, this, [this, req](KJob *job) {
         mExtraCollections.clear();
@@ -276,7 +278,7 @@ void GraphResource::fetchFolderTree()
 {
     qCDebug(GRAPH_LOG) << "retrieveCollections, incremental:" << !mFolderDeltaLink.isEmpty();
     // GET /me/mailFolders/delta  (uses stored top-level deltaLink for incremental sync)
-    auto *job = new GraphFetchFoldersJob(mClient, mRootCollection, mFolderDeltaLink, this);
+    auto job = new GraphFetchFoldersJob(mClient, mRootCollection, mFolderDeltaLink, this);
     connect(job, &KJob::result, this, &GraphResource::fetchFoldersJobFinished);
     job->start();
 }
@@ -293,7 +295,9 @@ void GraphResource::applySpecialAttributes(Akonadi::Collection &col)
     if (display->iconName().isEmpty()) {
         display->setIconName(QLatin1String(sf.iconName));
     }
-    SpecialMailCollections::self()->registerCollection(sf.type, col);
+    if (!SpecialMailCollections::self()->registerCollection(sf.type, col)) {
+        qCWarning(GRAPH_LOG) << "could not register special collection" << col.name() << "as" << sf.attributeType;
+    }
     qCDebug(GRAPH_LOG) << "tagged special collection" << col.name() << "as" << sf.attributeType;
 }
 
@@ -344,7 +348,7 @@ void GraphResource::retrieveItems(const Akonadi::Collection &collection)
     if (mimeTypes.contains(GraphEventHandler::mimeType()) || mimeTypes.contains(GraphContactHandler::mimeType())) {
         // Calendar/contacts: delta change tracking, payloads delivered whole.
         const auto type = mimeTypes.contains(GraphEventHandler::mimeType()) ? GraphFetchPimItemsJob::Events : GraphFetchPimItemsJob::Contacts;
-        auto *job = new GraphFetchPimItemsJob(mClient, collection, type, collectionDeltaLink(collection), this);
+        auto job = new GraphFetchPimItemsJob(mClient, collection, type, collectionDeltaLink(collection), this);
         connect(job, &KJob::result, this, &GraphResource::fetchPimItemsJobFinished);
         job->start();
         return;
@@ -352,7 +356,7 @@ void GraphResource::retrieveItems(const Akonadi::Collection &collection)
 
     // Mail: GET /me/mailFolders/{id}/messages/delta  (per-collection deltaLink)
     const QString deltaLink = collectionDeltaLink(collection);
-    auto *job = new GraphFetchItemsJob(mClient, collection, deltaLink, this);
+    auto job = new GraphFetchItemsJob(mClient, collection, deltaLink, this);
     connect(job, &KJob::result, this, &GraphResource::fetchItemsJobFinished);
     job->start();
 }
@@ -384,9 +388,8 @@ void GraphResource::fetchPimItemsJobFinished(KJob *job)
     itemsRetrievedIncremental(fj->changedItems(), fj->removedItems());
 }
 
-bool GraphResource::retrieveItems(const Akonadi::Item::List &items, const QSet<QByteArray> &parts)
+bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unused]] const QSet<QByteArray> &parts)
 {
-    Q_UNUSED(parts)
     // Calendar/contact payloads are delivered whole during collection sync; if Akonadi
     // still asks (cache miss), the items already carry their payload, so just return them.
     if (!items.isEmpty()) {
@@ -402,7 +405,7 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, const QSet<Q
             auto pending = std::make_shared<Item::List>();
             auto remaining = std::make_shared<int>(items.size());
             for (const Item &item : items) {
-                auto *req = new GraphRequest(mClient, this);
+                auto req = new GraphRequest(mClient, this);
                 req->setPath(isEvent ? QStringLiteral("/me/events/%1").arg(item.remoteId()) : QStringLiteral("/me/contacts/%1").arg(item.remoteId()));
                 if (isEvent) {
                     req->addHeader("Prefer", "outlook.timezone=\"UTC\"");
@@ -431,7 +434,7 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, const QSet<Q
     }
 
     // Mail: GET /me/messages/{id}/$value  -> raw MIME -> KMime::Message
-    auto *job = new GraphFetchItemPayloadJob(mClient, items, this);
+    auto job = new GraphFetchItemPayloadJob(mClient, items, this);
     connect(job, &KJob::result, this, &GraphResource::fetchPayloadJobFinished);
     job->start();
     return true;
@@ -452,16 +455,17 @@ void GraphResource::fetchPayloadJobFinished(KJob *job)
 //  Change replay: local -> Graph   (Phase 2/3)
 // ============================================================================
 
-void GraphResource::itemsFlagsChanged(const Item::List &items, const QSet<QByteArray> &addedFlags, const QSet<QByteArray> &removedFlags)
+void GraphResource::itemsFlagsChanged(const Item::List &items,
+                                      [[maybe_unused]] const QSet<QByteArray> &addedFlags,
+                                      [[maybe_unused]] const QSet<QByteArray> &removedFlags)
 {
-    Q_UNUSED(addedFlags)
-    Q_UNUSED(removedFlags) // item.flags() already carries the final state
+    // item.flags() already carries the final state, so the added/removed sets are not needed.
     QList<GraphBatchJob::Call> calls;
     calls.reserve(items.size());
     for (const Item &item : items) {
         calls.append({GraphRequest::Patch, QStringLiteral("/me/messages/%1").arg(item.remoteId()), GraphMailHandler::flagPatchBody(item)});
     }
-    auto *job = new GraphBatchJob(mClient, calls, this);
+    auto job = new GraphBatchJob(mClient, calls, this);
     connect(job, &KJob::result, this, [this, items](KJob *job) {
         if (job->error()) {
             cancelTask(job->errorText());
@@ -472,9 +476,8 @@ void GraphResource::itemsFlagsChanged(const Item::List &items, const QSet<QByteA
     job->start();
 }
 
-void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partIdentifiers)
+void GraphResource::itemChanged(const Item &item, [[maybe_unused]] const QSet<QByteArray> &partIdentifiers)
 {
-    Q_UNUSED(partIdentifiers)
     const QString mime = item.mimeType();
     if (mime == GraphEventHandler::mimeType() && item.hasPayload<KCalendarCore::Incidence::Ptr>()) {
         auto incidence = item.payload<KCalendarCore::Incidence::Ptr>();
@@ -493,7 +496,7 @@ void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partId
 
 void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body)
 {
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Patch);
     req->setPath(path);
     req->setBody(body);
@@ -555,7 +558,7 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
         return;
     }
     // POST base64 MIME -> creates the message (as draft) in the target folder.
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Post);
     req->setPath(QStringLiteral("/me/mailFolders/%1/messages").arg(collection.remoteId()));
     req->setRawBody(rawMime, contentType);
@@ -573,7 +576,7 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
 
 void GraphResource::postPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body)
 {
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Post);
     req->setPath(path);
     req->setBody(body);
@@ -593,7 +596,7 @@ void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &
 {
     // Find Graph's auto-filed copy in Sent Items by its Internet Message-ID.
     const QString filter = QStringLiteral("internetMessageId eq '%1'").arg(messageId);
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/mailFolders/sentitems/messages?$select=id&$top=1&$filter=%1").arg(QString::fromUtf8(QUrl::toPercentEncoding(filter))));
     connect(req, &KJob::result, this, [this, item, req](KJob *job) {
         if (job->error()) {
@@ -614,9 +617,8 @@ void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &
     req->start();
 }
 
-void GraphResource::itemsMoved(const Item::List &items, const Collection &source, const Collection &destination)
+void GraphResource::itemsMoved(const Item::List &items, [[maybe_unused]] const Collection &source, const Collection &destination)
 {
-    Q_UNUSED(source)
     QList<GraphBatchJob::Call> calls;
     calls.reserve(items.size());
     QJsonObject body;
@@ -624,7 +626,7 @@ void GraphResource::itemsMoved(const Item::List &items, const Collection &source
     for (const Item &item : items) {
         calls.append({GraphRequest::Post, QStringLiteral("/me/messages/%1/move").arg(item.remoteId()), body});
     }
-    auto *job = new GraphBatchJob(mClient, calls, this);
+    auto job = new GraphBatchJob(mClient, calls, this);
     connect(job, &KJob::result, this, [this, items, job](KJob *kjob) {
         if (kjob->error()) {
             cancelTask(kjob->errorText());
@@ -659,7 +661,7 @@ void GraphResource::itemsRemoved(const Item::List &items)
         for (const Item &item : items) {
             calls.append({GraphRequest::Delete, pimBase.arg(item.remoteId()), {}});
         }
-        auto *job = new GraphBatchJob(mClient, calls, this);
+        auto job = new GraphBatchJob(mClient, calls, this);
         job->setIgnoreNotFound(true);
         connect(job, &KJob::result, this, [this](KJob *j) {
             if (j->error()) {
@@ -678,7 +680,7 @@ void GraphResource::itemsRemoved(const Item::List &items)
         // DELETE moves to Deleted Items' recoverable items; matches user expectation.
         calls.append({GraphRequest::Delete, QStringLiteral("/me/messages/%1").arg(item.remoteId()), {}});
     }
-    auto *job = new GraphBatchJob(mClient, calls, this);
+    auto job = new GraphBatchJob(mClient, calls, this);
     job->setIgnoreNotFound(true);
     connect(job, &KJob::result, this, [this](KJob *job) {
         if (job->error()) {
@@ -697,7 +699,7 @@ void GraphResource::collectionAdded(const Collection &collection, const Collecti
     QJsonObject body;
     body.insert(QStringLiteral("displayName"), collection.name());
 
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Post);
     req->setPath(path);
     req->setBody(body);
@@ -721,7 +723,7 @@ void GraphResource::collectionChanged(const Collection &collection, const QSet<Q
     }
     QJsonObject body;
     body.insert(QStringLiteral("displayName"), collection.name());
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Patch);
     req->setPath(QStringLiteral("/me/mailFolders/%1").arg(collection.remoteId()));
     req->setBody(body);
@@ -735,12 +737,11 @@ void GraphResource::collectionChanged(const Collection &collection, const QSet<Q
     req->start();
 }
 
-void GraphResource::collectionMoved(const Collection &collection, const Collection &source, const Collection &destination)
+void GraphResource::collectionMoved(const Collection &collection, [[maybe_unused]] const Collection &source, const Collection &destination)
 {
-    Q_UNUSED(source)
     QJsonObject body;
     body.insert(QStringLiteral("destinationId"), destination.remoteId());
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Post);
     req->setPath(QStringLiteral("/me/mailFolders/%1/move").arg(collection.remoteId()));
     req->setBody(body);
@@ -761,7 +762,7 @@ void GraphResource::collectionMoved(const Collection &collection, const Collecti
 
 void GraphResource::collectionRemoved(const Collection &collection)
 {
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Delete);
     req->setPath(QStringLiteral("/me/mailFolders/%1").arg(collection.remoteId()));
     connect(req, &KJob::result, this, [this, req](KJob *job) {
@@ -778,16 +779,15 @@ void GraphResource::collectionRemoved(const Collection &collection)
 //  Sending (called via D-Bus from graphmtaresource)
 // ============================================================================
 
-void GraphResource::sendItem(const Item &item)
+void GraphResource::sendItem([[maybe_unused]] const Item &item)
 {
     // Sending goes through the MTA agent -> sendMessage(); nothing to do here.
-    Q_UNUSED(item)
 }
 
 void GraphResource::sendMessage(const QString &id, const QByteArray &content)
 {
     // 1. Create a draft from the raw MIME (base64, Content-Type: text/plain)...
-    auto *createReq = new GraphRequest(mClient, this);
+    auto createReq = new GraphRequest(mClient, this);
     createReq->setMethod(GraphRequest::Post);
     createReq->setPath(QStringLiteral("/me/messages"));
     createReq->setRawBody(content.toBase64(), QByteArrayLiteral("text/plain"));
@@ -798,7 +798,7 @@ void GraphResource::sendMessage(const QString &id, const QByteArray &content)
         }
         const QString draftId = createReq->responseObject().value(QLatin1String("id")).toString();
         // 2. ...then send it.
-        auto *sendReq = new GraphRequest(mClient, this);
+        auto sendReq = new GraphRequest(mClient, this);
         sendReq->setMethod(GraphRequest::Post);
         sendReq->setPath(QStringLiteral("/me/messages/%1/send").arg(draftId));
         connect(sendReq, &KJob::result, this, [this, id](KJob *job) {
@@ -817,7 +817,7 @@ void GraphResource::clearFolderSyncState()
 
     // Also drop the per-collection message deltaLinks so the next sync re-lists
     // every message (items are merged by remoteId, nothing is duplicated).
-    auto *fetch = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive, this);
+    auto fetch = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive, this);
     fetch->fetchScope().setResource(identifier());
     connect(fetch, &CollectionFetchJob::collectionsReceived, this, [this](const Collection::List &cols) {
         for (const Collection &col : cols) {
@@ -840,7 +840,7 @@ QString GraphResource::collectionDeltaLink(const Collection &col)
 void GraphResource::saveCollectionDeltaLink(Collection col, const QString &deltaLink)
 {
     col.addAttribute(new GraphSyncStateAttribute(deltaLink));
-    auto *job = new CollectionModifyJob(col, this);
+    auto job = new CollectionModifyJob(col, this);
     job->start();
 }
 

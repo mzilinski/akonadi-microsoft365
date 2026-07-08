@@ -42,7 +42,7 @@ public:
     void forgetTokens();
 
     /// Current bearer token, or empty if not yet authenticated.
-    QString accessToken() const;
+    [[nodiscard]] QString accessToken() const;
 
 Q_SIGNALS:
     /// First successful token acquisition. Later silent renewals do not re-emit.
@@ -50,7 +50,7 @@ Q_SIGNALS:
     void failed(const QString &error);
 
 private:
-    static QSet<QByteArray> graphScopes();
+    [[nodiscard]] static QSet<QByteArray> graphScopes();
 
     void setUpFlow();
     void startSilentRefresh(const QString &refreshToken);

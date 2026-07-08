@@ -25,7 +25,7 @@ int main(int argc, char **argv)
         std::printf("usage: %s <resource instance id>\n", argv[0]);
         return 2;
     }
-    auto *job = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive);
+    auto job = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive);
     job->fetchScope().setResource(QString::fromLatin1(argv[1]));
     job->fetchScope().fetchAttribute<SpecialCollectionAttribute>();
     job->fetchScope().fetchAttribute<EntityDisplayAttribute>();

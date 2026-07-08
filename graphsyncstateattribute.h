@@ -18,7 +18,7 @@ public:
     explicit GraphSyncStateAttribute(const QString &deltaLink);
 
     void setDeltaLink(const QString &deltaLink);
-    const QString &deltaLink() const;
+    [[nodiscard]] const QString &deltaLink() const;
 
     QByteArray type() const override;
     Attribute *clone() const override;

@@ -5,6 +5,8 @@
 
 #include "graphoauth.h"
 
+#include <KLocalizedString>
+
 #include <QDateTime>
 #include <QDebug>
 #include <QDesktopServices>
@@ -96,7 +98,7 @@ void GraphOAuth::authenticate()
 
     setUpFlow();
 
-    auto *job = new QKeychain::ReadPasswordJob(kKeychainService, this);
+    auto job = new QKeychain::ReadPasswordJob(kKeychainService, this);
     job->setKey(mWalletKey);
     connect(job, &QKeychain::Job::finished, this, [this, job] {
         job->deleteLater();
@@ -130,7 +132,7 @@ void GraphOAuth::startInteractive()
         // Preferred port taken (e.g. another app of the same registration). Azure ignores
         // the port on http://localhost redirect URIs for desktop apps — any free one works.
         if (!mReplyHandler->listen(QHostAddress::LocalHost, 0)) {
-            Q_EMIT failed(QStringLiteral("OAuth2: cannot listen on localhost (no free port?)"));
+            Q_EMIT failed(i18n("OAuth2: cannot listen on localhost (no free port?)"));
             return;
         }
     }
@@ -159,7 +161,7 @@ void GraphOAuth::onRequestFailed()
         startInteractive();
         return;
     }
-    Q_EMIT failed(QStringLiteral("OAuth2 request failed"));
+    Q_EMIT failed(i18n("OAuth2 request failed"));
 }
 
 void GraphOAuth::persistRefreshToken()
@@ -168,7 +170,7 @@ void GraphOAuth::persistRefreshToken()
     if (refreshToken.isEmpty()) {
         return;
     }
-    auto *job = new QKeychain::WritePasswordJob(kKeychainService, this);
+    auto job = new QKeychain::WritePasswordJob(kKeychainService, this);
     job->setKey(mWalletKey);
     job->setTextData(refreshToken);
     connect(job, &QKeychain::Job::finished, job, &QObject::deleteLater);
@@ -182,7 +184,7 @@ void GraphOAuth::forgetTokens()
         mFlow->setToken(QString());
         mFlow->setRefreshToken(QString());
     }
-    auto *job = new QKeychain::DeletePasswordJob(kKeychainService, this);
+    auto job = new QKeychain::DeletePasswordJob(kKeychainService, this);
     job->setKey(mWalletKey);
     connect(job, &QKeychain::Job::finished, job, &QObject::deleteLater);
     job->start();
@@ -200,9 +202,12 @@ void GraphOAuth::scheduleProactiveRefresh()
         });
     }
     // Renew 5 minutes before expiry (Graph tokens last 60-90 min).
-    qint64 msecs = 30 * 60 * 1000;
+    constexpr qint64 defaultDelayMsecs = 30 * 60 * 1000;
+    constexpr qint64 minimumDelayMsecs = 60 * 1000;
+    constexpr qint64 expiryMarginMsecs = 5 * 60 * 1000;
+    qint64 msecs = defaultDelayMsecs;
     if (mFlow->expirationAt().isValid()) {
-        msecs = qMax<qint64>(60 * 1000, QDateTime::currentDateTime().msecsTo(mFlow->expirationAt()) - 5 * 60 * 1000);
+        msecs = qMax(minimumDelayMsecs, QDateTime::currentDateTime().msecsTo(mFlow->expirationAt()) - expiryMarginMsecs);
     }
     mRefreshTimer->start(int(qMin<qint64>(msecs, std::numeric_limits<int>::max())));
 }

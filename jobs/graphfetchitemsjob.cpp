@@ -24,7 +24,7 @@ GraphFetchItemsJob::GraphFetchItemsJob(GraphClient &client, const Collection &co
 
 void GraphFetchItemsJob::start()
 {
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     if (!mDeltaLink.isEmpty()) {
         req->setAbsoluteUrl(QUrl(mDeltaLink));
     } else {

@@ -21,15 +21,15 @@ public:
     GraphConfigDialog(GraphSettings *settings, const QString &resourceName, QWidget *parent = nullptr);
 
     /// The name the user chose for the resource instance (may be empty = unchanged).
-    QString displayName() const;
+    [[nodiscard]] QString displayName() const;
 
     void accept() override;
 
 private:
-    GraphSettings *mSettings;
-    QLineEdit *mName;
-    QLineEdit *mEmail;
-    QLineEdit *mTenant;
-    QLineEdit *mClientId;
-    QSpinBox *mPollInterval;
+    GraphSettings *const mSettings;
+    QLineEdit *const mName;
+    QLineEdit *const mEmail;
+    QLineEdit *const mTenant;
+    QLineEdit *const mClientId;
+    QSpinBox *const mPollInterval;
 };

@@ -23,9 +23,9 @@ public:
     void setBaseUrl(const QString &baseUrl); // https://graph.microsoft.com/v1.0
     void setAuth(GraphOAuth *auth); // token provider (not owned)
 
-    QString baseUrl() const;
-    GraphOAuth *auth() const;
-    QNetworkAccessManager *networkAccessManager() const;
+    [[nodiscard]] QString baseUrl() const;
+    [[nodiscard]] GraphOAuth *auth() const;
+    [[nodiscard]] QNetworkAccessManager *networkAccessManager() const;
 
 private:
     QString mBaseUrl;

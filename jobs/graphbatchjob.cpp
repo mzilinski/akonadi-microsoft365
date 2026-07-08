@@ -29,7 +29,7 @@ void GraphBatchJob::start()
 void GraphBatchJob::next()
 {
     const Call &call = mCalls.at(mIndex);
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setMethod(call.method);
     req->setPath(call.path);
     if (call.method == GraphRequest::Post || call.method == GraphRequest::Patch) {

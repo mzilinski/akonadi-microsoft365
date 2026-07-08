@@ -8,6 +8,7 @@
 #include "auth/graphoauth.h"
 #include "graphclient.h"
 
+#include <KLocalizedString>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkAccessManager>
@@ -116,10 +117,11 @@ void GraphRequest::onReplyFinished()
         const QJsonObject err = QJsonDocument::fromJson(reply->readAll()).object().value(QLatin1String("error")).toObject();
         setError(KJob::UserDefinedError);
         if (!err.isEmpty()) {
-            setErrorText(QStringLiteral("%1 (HTTP %2, %3)")
-                             .arg(err.value(QLatin1String("message")).toString())
-                             .arg(http)
-                             .arg(err.value(QLatin1String("code")).toString()));
+            setErrorText(i18nc("%1 is the server error message, %2 the HTTP status code, %3 the server error code",
+                               "%1 (HTTP %2, %3)",
+                               err.value(QLatin1String("message")).toString(),
+                               http,
+                               err.value(QLatin1String("code")).toString()));
         } else {
             setErrorText(reply->errorString());
         }

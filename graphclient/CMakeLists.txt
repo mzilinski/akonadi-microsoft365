@@ -22,6 +22,7 @@ target_link_libraries(
         Qt::Network
         Qt::NetworkAuth # QOAuth2AuthorizationCodeFlow
         KPim6::AkonadiCore
+        KF6::I18n
         KF6::Mime
         Qt6Keychain::Qt6Keychain
 )

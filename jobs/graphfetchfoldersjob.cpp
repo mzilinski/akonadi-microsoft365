@@ -8,6 +8,7 @@
 #include "graphclient/graphrequest.h"
 
 #include <Akonadi/Collection>
+#include <KLocalizedString>
 #include <KMime/Message>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -27,7 +28,7 @@ void GraphFetchFoldersJob::start()
 {
     // Folders reference their parent by the *real* id of the mailbox root, not by the
     // "msgfolderroot" well-known alias — resolve it first so the tree links up.
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/mailFolders/msgfolderroot?$select=id"));
     connect(req, &KJob::result, this, &GraphFetchFoldersJob::onRootResolved);
     req->start();
@@ -45,7 +46,7 @@ void GraphFetchFoldersJob::onRootResolved(KJob *job)
     const QString rootId = req->responseObject().value(QLatin1String("id")).toString();
     if (rootId.isEmpty()) {
         setError(KJob::UserDefinedError);
-        setErrorText(QStringLiteral("could not resolve msgfolderroot id"));
+        setErrorText(i18n("Could not resolve the mailbox root folder"));
         emitResult();
         return;
     }
@@ -55,7 +56,7 @@ void GraphFetchFoldersJob::onRootResolved(KJob *job)
 
 void GraphFetchFoldersJob::startDelta()
 {
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     if (mIncremental) {
         req->setAbsoluteUrl(QUrl(mDeltaLink)); // stored @odata.deltaLink
     } else {

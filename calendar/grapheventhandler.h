@@ -17,11 +17,11 @@
 namespace GraphEventHandler
 {
 /// Akonadi item content mime type for calendar events.
-QString mimeType();
+[[nodiscard]] QString mimeType();
 
 /// Graph event JSON -> KCalendarCore::Event (returns null on missing id).
-KCalendarCore::Event::Ptr toEvent(const QJsonObject &json);
+[[nodiscard]] KCalendarCore::Event::Ptr toEvent(const QJsonObject &json);
 
 /// KCalendarCore::Event -> Graph event JSON (for create/update).
-QJsonObject toJson(const KCalendarCore::Event::Ptr &event);
+[[nodiscard]] QJsonObject toJson(const KCalendarCore::Event::Ptr &event);
 }

@@ -26,7 +26,7 @@ class QTimer;
  * Receiving resource: folders + messages (+ later calendar/contacts).
  *
  * ResourceBase drives synchronisation by calling the retrieve*() slots below.
- * Each retrieve*() kicks off an async KJob (jobs/*), and on completion we hand the
+ * Each retrieve*() kicks off an async KJob (see jobs/), and on completion we hand the
  * result back to Akonadi via collectionsRetrieved()/itemsRetrieved()/changeCommitted().
  *
  * The AgentBase::ObserverV3 overrides implement *change replay*: local edits in KMail
@@ -43,12 +43,12 @@ public:
     explicit GraphResource(const QString &id);
     ~GraphResource() override;
 
-    GraphSettings *settings()
+    [[nodiscard]] GraphSettings *settings()
     {
         return mSettings.data();
     }
 
-    const Akonadi::Collection &rootCollection() const
+    [[nodiscard]] const Akonadi::Collection &rootCollection() const
     {
         return mRootCollection;
     }
@@ -128,7 +128,7 @@ private:
 
     // Per-collection delta state (the @odata.deltaLink) is stored as a collection
     // attribute, exactly like EwsSyncStateAttribute.
-    static QString collectionDeltaLink(const Akonadi::Collection &col);
+    [[nodiscard]] static QString collectionDeltaLink(const Akonadi::Collection &col);
     void saveCollectionDeltaLink(Akonadi::Collection col, const QString &deltaLink);
 
     GraphClient mClient;

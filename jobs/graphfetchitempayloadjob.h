@@ -28,7 +28,7 @@ public:
     GraphFetchItemPayloadJob(GraphClient &client, const Akonadi::Item::List &items, QObject *parent = nullptr);
 
     void start() override;
-    Akonadi::Item::List items() const;
+    [[nodiscard]] Akonadi::Item::List items() const;
 
 private:
     void fetchBatch();

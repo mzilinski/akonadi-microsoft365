@@ -68,7 +68,7 @@ int main(int argc, char **argv)
     // --- 1. folder delta -----------------------------------------------------
     Collection root;
     root.setRemoteId(QStringLiteral("msgfolderroot"));
-    auto *foldersJob = new GraphFetchFoldersJob(client, root, QString());
+    auto foldersJob = new GraphFetchFoldersJob(client, root, QString());
     if (runJob(foldersJob, "GraphFetchFoldersJob")) {
         std::printf("OK    %-28s %lld folders, deltaLink: %s\n",
                     "GraphFetchFoldersJob",
@@ -95,7 +95,7 @@ int main(int argc, char **argv)
     }
 
     // --- 2. message delta ----------------------------------------------------
-    auto *itemsJob = new GraphFetchItemsJob(client, inbox, QString());
+    auto itemsJob = new GraphFetchItemsJob(client, inbox, QString());
     Item::List stubs;
     if (runJob(itemsJob, "GraphFetchItemsJob")) {
         stubs = itemsJob->changedItems();
@@ -113,7 +113,7 @@ int main(int argc, char **argv)
     // --- 3. MIME payload (batch of several -> exercises /$batch, out-of-order) --
     if (!stubs.isEmpty()) {
         Item::List batch = stubs.mid(0, qMin(5, stubs.size()));
-        auto *payloadJob = new GraphFetchItemPayloadJob(client, batch);
+        auto payloadJob = new GraphFetchItemPayloadJob(client, batch);
         if (runJob(payloadJob, "GraphFetchItemPayloadJob")) {
             int parsed = 0;
             for (const Item &it : payloadJob->items()) {
@@ -140,7 +140,7 @@ int main(int argc, char **argv)
         const Item &item = stubs.first();
         QJsonObject body;
         body.insert(QStringLiteral("isRead"), item.hasFlag(MessageFlags::Seen));
-        auto *patchJob = new GraphBatchJob(client, {{GraphRequest::Patch, QStringLiteral("/me/messages/%1").arg(item.remoteId()), body}});
+        auto patchJob = new GraphBatchJob(client, {{GraphRequest::Patch, QStringLiteral("/me/messages/%1").arg(item.remoteId()), body}});
         if (runJob(patchJob, "GraphBatchJob (PATCH flags)")) {
             std::printf("OK    %-28s isRead re-asserted\n", "GraphBatchJob (PATCH flags)");
         } else {
@@ -156,7 +156,7 @@ int main(int argc, char **argv)
         msg.setBody("smoke test - safe to delete\n");
         msg.assemble();
 
-        auto *createReq = new GraphRequest(client);
+        auto createReq = new GraphRequest(client);
         createReq->setMethod(GraphRequest::Post);
         createReq->setPath(QStringLiteral("/me/messages"));
         createReq->setRawBody(msg.encodedContent(KMime::NewlineType::CRLF).toBase64(), QByteArrayLiteral("text/plain"));
@@ -164,7 +164,7 @@ int main(int argc, char **argv)
             const QString draftId = createReq->responseObject().value(QLatin1String("id")).toString();
             std::printf("OK    %-28s id: %s...\n", "draft create (POST MIME)", qPrintable(draftId.left(20)));
 
-            auto *delJob = new GraphBatchJob(client, {{GraphRequest::Delete, QStringLiteral("/me/messages/%1").arg(draftId), {}}});
+            auto delJob = new GraphBatchJob(client, {{GraphRequest::Delete, QStringLiteral("/me/messages/%1").arg(draftId), {}}});
             if (runJob(delJob, "draft delete (DELETE)")) {
                 std::printf("OK    %-28s cleaned up\n", "draft delete (DELETE)");
             } else {

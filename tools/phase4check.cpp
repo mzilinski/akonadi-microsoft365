@@ -44,7 +44,7 @@ static bool runJob(KJob *job)
 // Minimal synchronous request helper for setup/teardown (create/delete).
 static QJsonObject request(GraphClient &client, GraphRequest::Method method, const QString &path, const QJsonObject &body = {})
 {
-    auto *req = new GraphRequest(client);
+    auto req = new GraphRequest(client);
     req->setMethod(method);
     req->setPath(path);
     if (method == GraphRequest::Post || method == GraphRequest::Patch) {
@@ -104,7 +104,7 @@ int main(int argc, char **argv)
     Collection calCol;
     calCol.setRemoteId(calId);
     calCol.setContentMimeTypes({GraphEventHandler::mimeType()});
-    auto *evJob = new GraphFetchPimItemsJob(client, calCol, GraphFetchPimItemsJob::Events, QString());
+    auto evJob = new GraphFetchPimItemsJob(client, calCol, GraphFetchPimItemsJob::Events, QString());
     if (runJob(evJob)) {
         bool found = false;
         for (const Item &it : evJob->changedItems()) {
@@ -150,7 +150,7 @@ int main(int argc, char **argv)
     Collection ctCol;
     ctCol.setRemoteId(QStringLiteral("contacts-default"));
     ctCol.setContentMimeTypes({GraphContactHandler::mimeType()});
-    auto *ctJob = new GraphFetchPimItemsJob(client, ctCol, GraphFetchPimItemsJob::Contacts, QString());
+    auto ctJob = new GraphFetchPimItemsJob(client, ctCol, GraphFetchPimItemsJob::Contacts, QString());
     if (runJob(ctJob)) {
         bool found = false;
         for (const Item &it : ctJob->changedItems()) {
@@ -245,12 +245,12 @@ int main(int argc, char **argv)
         cal.setRemoteId(calId);
         cal.setContentMimeTypes({GraphEventHandler::mimeType()});
 
-        auto *init = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, QString());
+        auto init = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, QString());
         runJob(init);
         const long long initialCount = init->changedItems().size(); // capture before KJob auto-deletes
         const QString dl1 = init->deltaLink();
 
-        auto *empty = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl1);
+        auto empty = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl1);
         runJob(empty);
         const bool emptyOk = empty->changedItems().isEmpty() && empty->removedItems().isEmpty() && !empty->deltaLink().isEmpty();
         const QString dl2 = empty->deltaLink();
@@ -262,7 +262,7 @@ int main(int argc, char **argv)
         const QString newId =
             request(client, GraphRequest::Post, QStringLiteral("/me/calendars/%1/events").arg(calId), body).value(QLatin1String("id")).toString();
 
-        auto *added = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl2);
+        auto added = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl2);
         runJob(added);
         bool addOk = false;
         for (const Item &it : added->changedItems()) {
@@ -274,7 +274,7 @@ int main(int argc, char **argv)
 
         // delete -> delta should report it as removed
         request(client, GraphRequest::Delete, QStringLiteral("/me/events/%1").arg(newId));
-        auto *removed = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl3);
+        auto removed = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl3);
         runJob(removed);
         bool delOk = false;
         for (const Item &it : removed->removedItems()) {

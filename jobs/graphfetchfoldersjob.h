@@ -21,14 +21,14 @@ public:
 
     void start() override;
 
-    bool isIncremental() const; // true if a deltaLink was supplied
-    Akonadi::Collection::List allCollections() const; // full sync
-    Akonadi::Collection::List changedCollections() const; // incremental
-    Akonadi::Collection::List removedCollections() const; // incremental (@removed)
-    QString deltaLink() const; // persist for next sync
+    [[nodiscard]] bool isIncremental() const; // true if a deltaLink was supplied
+    [[nodiscard]] Akonadi::Collection::List allCollections() const; // full sync
+    [[nodiscard]] Akonadi::Collection::List changedCollections() const; // incremental
+    [[nodiscard]] Akonadi::Collection::List removedCollections() const; // incremental (@removed)
+    [[nodiscard]] QString deltaLink() const; // persist for next sync
 
     /// Root collection with its remoteId resolved to the real msgfolderroot id.
-    Akonadi::Collection rootCollection() const;
+    [[nodiscard]] Akonadi::Collection rootCollection() const;
 
 private Q_SLOTS:
     void onRootResolved(KJob *);
@@ -36,7 +36,7 @@ private Q_SLOTS:
 
 private:
     void startDelta();
-    Akonadi::Collection collectionFromJson(const QJsonObject &folder) const;
+    [[nodiscard]] Akonadi::Collection collectionFromJson(const QJsonObject &folder) const;
 
     GraphClient &mClient;
     Akonadi::Collection mRoot;

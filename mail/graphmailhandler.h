@@ -16,13 +16,13 @@
 
 namespace GraphMailHandler
 {
-QString mimeType();
+[[nodiscard]] QString mimeType();
 
 /// Seen/Flagged -> PATCH body for /me/messages/{id}.
-QJsonObject flagPatchBody(const Akonadi::Item &item);
+[[nodiscard]] QJsonObject flagPatchBody(const Akonadi::Item &item);
 
 /// KMime payload -> body for creating a message from MIME:
 ///   POST /me/messages  with Content-Type: text/plain and base64(MIME)
 /// Returns (rawBody, contentType).
-QPair<QByteArray, QByteArray> createFromMime(const Akonadi::Item &item);
+[[nodiscard]] QPair<QByteArray, QByteArray> createFromMime(const Akonadi::Item &item);
 }

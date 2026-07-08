@@ -23,16 +23,16 @@ public:
 
     void start() override;
 
-    Akonadi::Collection collection() const;
-    Akonadi::Item::List changedItems() const;
-    Akonadi::Item::List removedItems() const;
-    QString deltaLink() const;
+    [[nodiscard]] Akonadi::Collection collection() const;
+    [[nodiscard]] Akonadi::Item::List changedItems() const;
+    [[nodiscard]] Akonadi::Item::List removedItems() const;
+    [[nodiscard]] QString deltaLink() const;
 
 private Q_SLOTS:
     void onRequestFinished(KJob *);
 
 private:
-    Akonadi::Item itemStubFromJson(const QJsonObject &message) const;
+    [[nodiscard]] Akonadi::Item itemStubFromJson(const QJsonObject &message) const;
 
     GraphClient &mClient;
     Akonadi::Collection mCollection;

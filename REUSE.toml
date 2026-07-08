@@ -9,7 +9,7 @@ path = [
     "IMPLEMENTATION.md",
     "graphresource.kcfg",
     "graphsettingsbase.kcfgc",
-    "graphresource.desktop.cmake",
+    "graphresource.desktop",
     "graphmtaresource.desktop",
 ]
 precedence = "aggregate"

@@ -36,7 +36,7 @@ bool GraphMtaResource::connectToMasterResource()
         if (!service.startsWith(kResourceServicePrefix)) {
             continue;
         }
-        auto *iface = new OrgKdeAkonadiGraphResourceInterface(service, QStringLiteral("/"), QDBusConnection::sessionBus(), this);
+        auto iface = new OrgKdeAkonadiGraphResourceInterface(service, QStringLiteral("/"), QDBusConnection::sessionBus(), this);
         if (iface->isValid()) {
             mGraphResource = iface;
             connect(mGraphResource, &OrgKdeAkonadiGraphResourceInterface::messageSent, this, &GraphMtaResource::messageSent);

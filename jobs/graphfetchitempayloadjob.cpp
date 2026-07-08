@@ -7,6 +7,7 @@
 
 #include "graphclient/graphrequest.h"
 
+#include <KLocalizedString>
 #include <KMime/Message>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -50,7 +51,7 @@ void GraphFetchItemPayloadJob::fetchBatch()
     QJsonObject body;
     body.insert(QStringLiteral("requests"), requests);
 
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Post);
     req->setPath(QStringLiteral("/$batch"));
     req->setBody(body);
@@ -71,7 +72,7 @@ void GraphFetchItemPayloadJob::fetchBatch()
             const int status = resp.value(QLatin1String("status")).toInt();
             if (status < 200 || status >= 300) {
                 setError(KJob::UserDefinedError);
-                setErrorText(QStringLiteral("batch payload fetch failed for %1 (HTTP %2)").arg(mItems[idx].remoteId()).arg(status));
+                setErrorText(i18n("Failed to fetch the content of message %1 (HTTP %2)", mItems[idx].remoteId(), status));
                 emitResult();
                 return;
             }

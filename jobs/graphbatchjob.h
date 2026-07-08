@@ -36,7 +36,7 @@ public:
     void start() override;
 
     /// One entry per call, in order; empty object for responses without a body (204).
-    QList<QJsonObject> responses() const;
+    [[nodiscard]] QList<QJsonObject> responses() const;
 
 private:
     void next();

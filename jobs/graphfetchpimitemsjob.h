@@ -32,10 +32,10 @@ public:
 
     void start() override;
 
-    Akonadi::Collection collection() const;
-    Akonadi::Item::List changedItems() const;
-    Akonadi::Item::List removedItems() const;
-    QString deltaLink() const;
+    [[nodiscard]] Akonadi::Collection collection() const;
+    [[nodiscard]] Akonadi::Item::List changedItems() const;
+    [[nodiscard]] Akonadi::Item::List removedItems() const;
+    [[nodiscard]] QString deltaLink() const;
 
 private Q_SLOTS:
     void onDeltaFinished(KJob *);

@@ -235,12 +235,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     )
 endif()
 
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/graphresource.desktop.cmake
-    ${CMAKE_CURRENT_BINARY_DIR}/graphresource.desktop
-)
-
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/graphresource.desktop DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents")
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/graphresource.desktop DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents")
 install(
     TARGETS
         akonadi_graph_resource

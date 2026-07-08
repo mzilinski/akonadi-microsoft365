@@ -46,11 +46,11 @@ public:
     void start() override;
 
     // Results (available in result slot):
-    QJsonObject responseObject() const; // single-object responses
-    QJsonArray aggregatedValue() const; // paged list responses ("value" concatenated)
-    QByteArray rawPayload() const; // when setExpectRawPayload(true)
-    QString deltaLink() const; // @odata.deltaLink from the final page (if any)
-    int httpStatus() const; // HTTP status of the (last) reply
+    [[nodiscard]] QJsonObject responseObject() const; // single-object responses
+    [[nodiscard]] QJsonArray aggregatedValue() const; // paged list responses ("value" concatenated)
+    [[nodiscard]] QByteArray rawPayload() const; // when setExpectRawPayload(true)
+    [[nodiscard]] QString deltaLink() const; // @odata.deltaLink from the final page (if any)
+    [[nodiscard]] int httpStatus() const; // HTTP status of the (last) reply
 
 private Q_SLOTS:
     void onReplyFinished();

@@ -26,7 +26,7 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    auto *job = new ItemFetchJob(Collection(QString::fromLatin1(argv[1]).toLongLong()));
+    auto job = new ItemFetchJob(Collection(QString::fromLatin1(argv[1]).toLongLong()));
     job->fetchScope().setFetchModificationTime(false);
     QObject::connect(job, &ItemFetchJob::result, [&](KJob *j) {
         if (j->error()) {
@@ -41,7 +41,7 @@ int main(int argc, char **argv)
             return;
         }
         // Now fetch the full payload of the first item — triggers the resource.
-        auto *pj = new ItemFetchJob(items.first());
+        auto pj = new ItemFetchJob(items.first());
         pj->fetchScope().fetchFullPayload();
         QObject::connect(pj, &ItemFetchJob::result, [&](KJob *j2) {
             if (j2->error()) {

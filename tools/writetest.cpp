@@ -58,7 +58,7 @@ static void wait(int ms)
 // Fetch an item fresh and return its remoteId (empty if the resource hasn't committed).
 static QString remoteIdOf(const Item &item)
 {
-    auto *job = new ItemFetchJob(Item(item.id()));
+    auto job = new ItemFetchJob(Item(item.id()));
     if (!runJob(job, "refetch")) {
         return {};
     }
@@ -76,7 +76,7 @@ int main(int argc, char **argv)
     const QString resource = QString::fromLatin1(argv[1]);
 
     // Locate the calendar and contacts collections.
-    auto *cjob = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive);
+    auto cjob = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive);
     cjob->fetchScope().setResource(resource);
     if (!runJob(cjob, "collection fetch")) {
         return 1;
@@ -107,7 +107,7 @@ int main(int argc, char **argv)
         Item item(GraphEventHandler::mimeType());
         item.setPayload<KCalendarCore::Incidence::Ptr>(ev);
 
-        auto *create = new ItemCreateJob(item, calendar);
+        auto create = new ItemCreateJob(item, calendar);
         if (runJob(create, "event create")) {
             Item created = create->item();
             wait(4000); // let the resource POST and changeCommitted()
@@ -116,7 +116,7 @@ int main(int argc, char **argv)
                 std::printf("OK    event create -> server id %s...\n", qPrintable(rid.left(20)));
 
                 // modify
-                auto *fetch = new ItemFetchJob(Item(created.id()));
+                auto fetch = new ItemFetchJob(Item(created.id()));
                 fetch->fetchScope().fetchFullPayload();
                 runJob(fetch, "event refetch");
                 Item toModify = fetch->items().first();
@@ -152,7 +152,7 @@ int main(int argc, char **argv)
         Item item(GraphContactHandler::mimeType());
         item.setPayload<KContacts::Addressee>(a);
 
-        auto *create = new ItemCreateJob(item, contacts);
+        auto create = new ItemCreateJob(item, contacts);
         if (runJob(create, "contact create")) {
             Item created = create->item();
             wait(4000);
@@ -160,7 +160,7 @@ int main(int argc, char **argv)
             if (!rid.isEmpty()) {
                 std::printf("OK    contact create -> server id %s...\n", qPrintable(rid.left(20)));
 
-                auto *fetch = new ItemFetchJob(Item(created.id()));
+                auto fetch = new ItemFetchJob(Item(created.id()));
                 fetch->fetchScope().fetchFullPayload();
                 runJob(fetch, "contact refetch");
                 Item toModify = fetch->items().first();

@@ -50,7 +50,7 @@ void GraphFetchPimItemsJob::resolveContactsFolderThenStart()
 {
     // The default contacts folder is not listed by /me/contactFolders; get its id from
     // any contact's parentFolderId, then start the folder-scoped delta.
-    auto *pre = new GraphRequest(mClient, this);
+    auto pre = new GraphRequest(mClient, this);
     pre->setPath(QStringLiteral("/me/contacts?$top=1&$select=id,parentFolderId"));
     connect(pre, &KJob::result, this, [this, pre](KJob *job) {
         if (job->error()) {
@@ -76,7 +76,7 @@ void GraphFetchPimItemsJob::resolveContactsFolderThenStart()
 
 void GraphFetchPimItemsJob::startDelta(const QString &url, bool isAbsolute)
 {
-    auto *req = new GraphRequest(mClient, this);
+    auto req = new GraphRequest(mClient, this);
     if (isAbsolute) {
         req->setAbsoluteUrl(QUrl(url));
     } else {
