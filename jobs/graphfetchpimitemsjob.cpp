@@ -93,13 +93,22 @@ void GraphFetchPimItemsJob::startDelta(const QString &url, bool isAbsolute)
 
 void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
 {
+    auto *req = qobject_cast<GraphRequest *>(job);
     if (job->error()) {
+        if (req->httpStatus() == 410 && !mDeltaLink.isEmpty()) {
+            // The stored delta token expired (HTTP 410 Gone) — drop it and rerun the
+            // delta from scratch. Delivery is incremental, so this only re-lists.
+            mDeltaLink.clear();
+            mChanged.clear();
+            mRemoved.clear();
+            start();
+            return;
+        }
         setError(job->error());
         setErrorText(job->errorText());
         emitResult();
         return;
     }
-    auto *req = qobject_cast<GraphRequest *>(job);
     mDeltaLink = req->deltaLink();
 
     for (const auto &v : req->aggregatedValue()) {

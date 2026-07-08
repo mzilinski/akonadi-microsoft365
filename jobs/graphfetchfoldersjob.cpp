@@ -86,13 +86,24 @@ Collection GraphFetchFoldersJob::collectionFromJson(const QJsonObject &folder) c
 
 void GraphFetchFoldersJob::onRequestFinished(KJob *job)
 {
+    auto *req = qobject_cast<GraphRequest *>(job);
     if (job->error()) {
+        if (req->httpStatus() == 410 && mIncremental) {
+            // The stored delta token expired (HTTP 410 Gone) — fall back to a full
+            // folder tree sync, which also produces a fresh deltaLink.
+            mDeltaLink.clear();
+            mIncremental = false;
+            mAll.clear();
+            mChanged.clear();
+            mRemoved.clear();
+            startDelta();
+            return;
+        }
         setError(job->error());
         setErrorText(job->errorText());
         emitResult();
         return;
     }
-    auto *req = qobject_cast<GraphRequest *>(job);
     mDeltaLink = req->deltaLink();
 
     const QJsonArray folders = req->aggregatedValue();
