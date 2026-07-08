@@ -33,7 +33,11 @@ public:
         , mClientId(new QLineEdit(parent))
         , mPollInterval(new QSpinBox(parent))
     {
-        auto layout = new QVBoxLayout(parent);
+        // The host (AgentConfigurationWidget) already put a QVBoxLayout on parent;
+        // plugins add one container widget to it (cf. contactssettingswidget.cpp).
+        auto mainWidget = new QWidget(parent);
+        parent->layout()->addWidget(mainWidget);
+        auto layout = new QVBoxLayout(mainWidget);
         layout->setContentsMargins({});
         auto form = new QFormLayout;
         layout->addLayout(form);
@@ -52,7 +56,7 @@ public:
         mPollInterval->setSuffix(i18nc("@item:valuesuffix minutes", " min"));
         form->addRow(i18nc("@label:spinbox", "Check for new mail every:"), mPollInterval);
 
-        auto hint = new QLabel(i18nc("@info", "Changing the tenant or client id requires signing in again."), parent);
+        auto hint = new QLabel(i18nc("@info", "Changing the tenant or client id requires signing in again."), mainWidget);
         hint->setWordWrap(true);
         hint->setEnabled(false);
         layout->addWidget(hint);
