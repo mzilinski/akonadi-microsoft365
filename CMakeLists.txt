@@ -34,6 +34,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
             Gui
             Network
             NetworkAuth
+            Test
             Widgets
     )
     find_package(KF6Config ${KF_MIN_VERSION} CONFIG REQUIRED)
@@ -233,6 +234,10 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
         KF6::Contacts
         Qt::Core
     )
+endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(autotests)
 endif()
 
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/graphresource.desktop DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents")
