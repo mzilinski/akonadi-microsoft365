@@ -37,7 +37,9 @@ QDateTime parseGraphDateTime(const QJsonObject &dtz, bool allDay)
     QDateTime dt = QDateTime::fromString(normalized, QStringLiteral("yyyy-MM-ddTHH:mm:ss"));
     dt.setTimeZone(QTimeZone::utc());
     if (allDay) {
-        return dt.toLocalTime(); // date component is what matters
+        // Take the date verbatim (converting the UTC midnight to local time would
+        // shift the day for zones west of UTC).
+        return QDateTime(dt.date(), QTime(0, 0));
     }
     return dt;
 }
@@ -45,8 +47,13 @@ QDateTime parseGraphDateTime(const QJsonObject &dtz, bool allDay)
 QJsonObject utcDateTime(const QDateTime &dt, bool allDay)
 {
     QJsonObject o;
-    const QDateTime u = dt.toUTC();
-    o.insert(QStringLiteral("dateTime"), u.toString(allDay ? QStringLiteral("yyyy-MM-ddT00:00:00.0000000") : QStringLiteral("yyyy-MM-ddTHH:mm:ss.0000000")));
+    if (allDay) {
+        // Take the date verbatim: converting a local midnight to UTC would shift the
+        // day for zones east of UTC.
+        o.insert(QStringLiteral("dateTime"), QString(dt.date().toString(Qt::ISODate) + QLatin1String("T00:00:00.0000000")));
+    } else {
+        o.insert(QStringLiteral("dateTime"), dt.toUTC().toString(QStringLiteral("yyyy-MM-ddTHH:mm:ss.0000000")));
+    }
     o.insert(QStringLiteral("timeZone"), QStringLiteral("UTC"));
     return o;
 }
@@ -132,7 +139,13 @@ KCalendarCore::Event::Ptr toEvent(const QJsonObject &json)
     const bool allDay = json.value(QLatin1String("isAllDay")).toBool();
     event->setAllDay(allDay);
     event->setDtStart(parseGraphDateTime(json.value(QLatin1String("start")).toObject(), allDay));
-    event->setDtEnd(parseGraphDateTime(json.value(QLatin1String("end")).toObject(), allDay));
+    QDateTime end = parseGraphDateTime(json.value(QLatin1String("end")).toObject(), allDay);
+    if (allDay && end.isValid()) {
+        // Graph's all-day end is exclusive (midnight of the next day); KCalendarCore
+        // expects the inclusive last day — otherwise every all-day event shows two days.
+        end = end.addDays(-1);
+    }
+    event->setDtEnd(end);
 
     event->setLocation(json.value(QLatin1String("location")).toObject().value(QLatin1String("displayName")).toString());
 
@@ -198,7 +211,8 @@ QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
     const bool allDay = event->allDay();
     json.insert(QStringLiteral("isAllDay"), allDay);
     json.insert(QStringLiteral("start"), utcDateTime(event->dtStart(), allDay));
-    json.insert(QStringLiteral("end"), utcDateTime(event->dtEnd(), allDay));
+    // Mirror the inclusive/exclusive conversion from toEvent().
+    json.insert(QStringLiteral("end"), utcDateTime(allDay ? event->dtEnd().addDays(1) : event->dtEnd(), allDay));
 
     if (!event->location().isEmpty()) {
         QJsonObject loc;

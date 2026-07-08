@@ -204,18 +204,39 @@ private Q_SLOTS:
         QCOMPARE(json.value(QLatin1String("showAs")).toString(), QStringLiteral("busy"));
     }
 
+    void shouldReadAllDayEventWithInclusiveEnd()
+    {
+        QJsonObject json;
+        json.insert(QStringLiteral("id"), QStringLiteral("AAMkAGI2"));
+        json.insert(QStringLiteral("subject"), QStringLiteral("Birthday"));
+        json.insert(QStringLiteral("isAllDay"), true);
+        // Graph's all-day end is exclusive: a one-day event ends at the next midnight.
+        json.insert(QStringLiteral("start"), graphDateTime(QStringLiteral("2026-07-10T00:00:00.0000000")));
+        json.insert(QStringLiteral("end"), graphDateTime(QStringLiteral("2026-07-11T00:00:00.0000000")));
+
+        const Event::Ptr event = GraphEventHandler::toEvent(json);
+        QVERIFY(event);
+        QVERIFY(event->allDay());
+        QCOMPARE(event->dtStart().date(), QDate(2026, 7, 10));
+        // KCalendarCore's all-day end is inclusive: same day, not two days.
+        QCOMPARE(event->dtEnd().date(), QDate(2026, 7, 10));
+    }
+
     void shouldWriteJsonForAllDayEvent()
     {
         Event::Ptr event(new Event);
         event->setSummary(QStringLiteral("Holiday"));
         event->setAllDay(true);
-        event->setDtStart(QDateTime(QDate(2026, 7, 10), QTime(0, 0), QTimeZone::utc()));
-        event->setDtEnd(QDateTime(QDate(2026, 7, 11), QTime(0, 0), QTimeZone::utc()));
+        // Inclusive KCalendarCore semantics: a one-day event starts and ends on the 10th.
+        event->setDtStart(QDateTime(QDate(2026, 7, 10), QTime(0, 0)));
+        event->setDtEnd(QDateTime(QDate(2026, 7, 10), QTime(0, 0)));
 
         const QJsonObject json = GraphEventHandler::toJson(event);
         QCOMPARE(json.value(QLatin1String("isAllDay")).toBool(), true);
         // All-day events must carry a midnight timestamp, whatever the local zone.
         QCOMPARE(json.value(QLatin1String("start")).toObject().value(QLatin1String("dateTime")).toString(), QStringLiteral("2026-07-10T00:00:00.0000000"));
+        // ...and Graph expects the exclusive end (midnight of the following day).
+        QCOMPARE(json.value(QLatin1String("end")).toObject().value(QLatin1String("dateTime")).toString(), QStringLiteral("2026-07-11T00:00:00.0000000"));
     }
 
     void shouldRoundTripThroughJson()
