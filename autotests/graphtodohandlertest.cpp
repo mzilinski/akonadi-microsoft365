@@ -158,6 +158,23 @@ private Q_SLOTS:
         QCOMPARE(json.value(QLatin1String("status")).toString(), QStringLiteral("completed"));
     }
 
+    void shouldWriteDailyRecurrenceWithEndDate()
+    {
+        Todo::Ptr todo(new Todo);
+        todo->setSummary(QStringLiteral("Gießen"));
+        todo->setDtStart(QDateTime(QDate(2026, 7, 10), QTime(8, 0), QTimeZone::utc()));
+        todo->recurrence()->setDaily(1);
+        todo->recurrence()->setEndDate(QDate(2026, 8, 31));
+
+        const QJsonObject recurrence = GraphTodoHandler::toJson(todo).value(QLatin1String("recurrence")).toObject();
+        QVERIFY(!recurrence.isEmpty());
+        QCOMPARE(recurrence.value(QLatin1String("pattern")).toObject().value(QLatin1String("type")).toString(), QStringLiteral("daily"));
+        const QJsonObject range = recurrence.value(QLatin1String("range")).toObject();
+        QCOMPARE(range.value(QLatin1String("type")).toString(), QStringLiteral("endDate"));
+        QCOMPARE(range.value(QLatin1String("endDate")).toString(), QStringLiteral("2026-08-31"));
+        QCOMPARE(range.value(QLatin1String("startDate")).toString(), QStringLiteral("2026-07-10"));
+    }
+
     void shouldRoundTripThroughJson()
     {
         QJsonObject json;

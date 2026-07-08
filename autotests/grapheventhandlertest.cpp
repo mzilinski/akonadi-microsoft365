@@ -239,6 +239,58 @@ private Q_SLOTS:
         QCOMPARE(json.value(QLatin1String("end")).toObject().value(QLatin1String("dateTime")).toString(), QStringLiteral("2026-07-11T00:00:00.0000000"));
     }
 
+    void shouldWriteWeeklyRecurrence()
+    {
+        Event::Ptr event(new Event);
+        event->setSummary(QStringLiteral("Weekly sync"));
+        event->setDtStart(QDateTime(QDate(2026, 7, 6), QTime(8, 0), QTimeZone::utc())); // a Monday
+        event->setDtEnd(QDateTime(QDate(2026, 7, 6), QTime(9, 0), QTimeZone::utc()));
+        QBitArray days(7);
+        days.setBit(0); // Monday
+        days.setBit(2); // Wednesday
+        event->recurrence()->setWeekly(2, days);
+        event->recurrence()->setDuration(10);
+
+        const QJsonObject json = GraphEventHandler::toJson(event);
+        const QJsonObject recurrence = json.value(QLatin1String("recurrence")).toObject();
+        QVERIFY(!recurrence.isEmpty());
+        const QJsonObject pattern = recurrence.value(QLatin1String("pattern")).toObject();
+        QCOMPARE(pattern.value(QLatin1String("type")).toString(), QStringLiteral("weekly"));
+        QCOMPARE(pattern.value(QLatin1String("interval")).toInt(), 2);
+        QCOMPARE(pattern.value(QLatin1String("daysOfWeek")).toArray(), (QJsonArray{QStringLiteral("monday"), QStringLiteral("wednesday")}));
+        const QJsonObject range = recurrence.value(QLatin1String("range")).toObject();
+        QCOMPARE(range.value(QLatin1String("type")).toString(), QStringLiteral("numbered"));
+        QCOMPARE(range.value(QLatin1String("numberOfOccurrences")).toInt(), 10);
+        QCOMPARE(range.value(QLatin1String("startDate")).toString(), QStringLiteral("2026-07-06"));
+    }
+
+    void shouldRoundTripRecurrence()
+    {
+        // read -> write must preserve the rule.
+        QJsonObject json;
+        json.insert(QStringLiteral("id"), QStringLiteral("AAMkAGI2"));
+        json.insert(QStringLiteral("start"), graphDateTime(QStringLiteral("2026-07-06T08:00:00.0000000")));
+        json.insert(QStringLiteral("end"), graphDateTime(QStringLiteral("2026-07-06T09:00:00.0000000")));
+        QJsonObject pattern;
+        pattern.insert(QStringLiteral("type"), QStringLiteral("weekly"));
+        pattern.insert(QStringLiteral("interval"), 2);
+        pattern.insert(QStringLiteral("daysOfWeek"), QJsonArray{QStringLiteral("monday"), QStringLiteral("wednesday")});
+        QJsonObject range;
+        range.insert(QStringLiteral("type"), QStringLiteral("numbered"));
+        range.insert(QStringLiteral("numberOfOccurrences"), 10);
+        QJsonObject recurrence;
+        recurrence.insert(QStringLiteral("pattern"), pattern);
+        recurrence.insert(QStringLiteral("range"), range);
+        json.insert(QStringLiteral("recurrence"), recurrence);
+
+        const QJsonObject back = GraphEventHandler::toJson(GraphEventHandler::toEvent(json)).value(QLatin1String("recurrence")).toObject();
+        const QJsonObject backPattern = back.value(QLatin1String("pattern")).toObject();
+        QCOMPARE(backPattern.value(QLatin1String("type")).toString(), QStringLiteral("weekly"));
+        QCOMPARE(backPattern.value(QLatin1String("interval")).toInt(), 2);
+        QCOMPARE(backPattern.value(QLatin1String("daysOfWeek")).toArray(), (QJsonArray{QStringLiteral("monday"), QStringLiteral("wednesday")}));
+        QCOMPARE(back.value(QLatin1String("range")).toObject().value(QLatin1String("numberOfOccurrences")).toInt(), 10);
+    }
+
     void shouldRoundTripThroughJson()
     {
         QJsonObject json;

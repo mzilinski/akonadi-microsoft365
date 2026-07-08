@@ -110,6 +110,73 @@ void applyRecurrence(const QJsonObject &recurrence, const Incidence::Ptr &incide
         }
     }
 }
+
+QJsonObject recurrenceToJson(const Incidence::Ptr &incidence)
+{
+    if (!incidence->recurs()) {
+        return {};
+    }
+    const Recurrence *r = incidence->recurrence();
+    const QDate startDate = incidence->dtStart().date();
+
+    QJsonObject pattern;
+    pattern.insert(QStringLiteral("interval"), qMax(1, static_cast<int>(r->frequency())));
+    switch (r->recurrenceType()) {
+    case Recurrence::rDaily:
+        pattern.insert(QStringLiteral("type"), QStringLiteral("daily"));
+        break;
+    case Recurrence::rWeekly: {
+        static const char *dayNames[] = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"};
+        QJsonArray daysOfWeek;
+        const QBitArray days = r->days();
+        for (int i = 0; i < 7 && i < days.size(); ++i) {
+            if (days.testBit(i)) {
+                daysOfWeek.append(QLatin1String(dayNames[i]));
+            }
+        }
+        if (daysOfWeek.isEmpty()) {
+            // Graph requires at least one day; fall back to the start day.
+            daysOfWeek.append(QLatin1String(dayNames[startDate.dayOfWeek() - 1]));
+        }
+        pattern.insert(QStringLiteral("type"), QStringLiteral("weekly"));
+        pattern.insert(QStringLiteral("daysOfWeek"), daysOfWeek);
+        break;
+    }
+    case Recurrence::rMonthlyDay:
+        pattern.insert(QStringLiteral("type"), QStringLiteral("absoluteMonthly"));
+        pattern.insert(QStringLiteral("dayOfMonth"), r->monthDays().isEmpty() ? startDate.day() : r->monthDays().first());
+        break;
+    case Recurrence::rYearlyMonth:
+        pattern.insert(QStringLiteral("type"), QStringLiteral("absoluteYearly"));
+        pattern.insert(QStringLiteral("dayOfMonth"), startDate.day());
+        pattern.insert(QStringLiteral("month"), startDate.month());
+        break;
+    default:
+        // No Graph equivalent (e.g. "every first Monday"); write no recurrence
+        // rather than a wrong one.
+        return {};
+    }
+
+    // Graph requires range.type and range.startDate.
+    QJsonObject rangeObj;
+    rangeObj.insert(QStringLiteral("startDate"), startDate.toString(Qt::ISODate));
+    rangeObj.insert(QStringLiteral("recurrenceTimeZone"), QStringLiteral("UTC"));
+    const int duration = r->duration();
+    if (duration > 0) {
+        rangeObj.insert(QStringLiteral("type"), QStringLiteral("numbered"));
+        rangeObj.insert(QStringLiteral("numberOfOccurrences"), duration);
+    } else if (duration == 0 && r->endDate().isValid()) {
+        rangeObj.insert(QStringLiteral("type"), QStringLiteral("endDate"));
+        rangeObj.insert(QStringLiteral("endDate"), r->endDate().toString(Qt::ISODate));
+    } else {
+        rangeObj.insert(QStringLiteral("type"), QStringLiteral("noEnd"));
+    }
+
+    QJsonObject recurrence;
+    recurrence.insert(QStringLiteral("pattern"), pattern);
+    recurrence.insert(QStringLiteral("range"), rangeObj);
+    return recurrence;
+}
 } // namespace
 
 namespace GraphEventHandler
@@ -224,6 +291,11 @@ QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
         json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(event->categories()));
     }
     json.insert(QStringLiteral("showAs"), event->transparency() == Event::Transparent ? QStringLiteral("free") : QStringLiteral("busy"));
+
+    const QJsonObject recurrence = recurrenceToJson(event);
+    if (!recurrence.isEmpty()) {
+        json.insert(QStringLiteral("recurrence"), recurrence);
+    }
     return json;
 }
 }

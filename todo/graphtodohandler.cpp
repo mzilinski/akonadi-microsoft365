@@ -174,6 +174,11 @@ QJsonObject toJson(const KCalendarCore::Todo::Ptr &todo)
     if (!todo->categories().isEmpty()) {
         json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(todo->categories()));
     }
+
+    const QJsonObject recurrence = GraphEventHandler::recurrenceToJson(todo);
+    if (!recurrence.isEmpty()) {
+        json.insert(QStringLiteral("recurrence"), recurrence);
+    }
     return json;
 }
 }
