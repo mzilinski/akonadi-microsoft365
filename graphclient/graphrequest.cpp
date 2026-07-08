@@ -62,6 +62,16 @@ void GraphRequest::setRawBody(const QByteArray &body, const QByteArray &contentT
 
 void GraphRequest::start()
 {
+    // Requests can be scheduled before the OAuth handshake has produced a token —
+    // e.g. a sync or send triggered while the interactive login is still open.
+    if (!mClient.auth()) {
+        setError(KJob::UserDefinedError);
+        setErrorText(i18n("Not authenticated with Microsoft 365 yet"));
+        QTimer::singleShot(0, this, [this] {
+            emitResult();
+        });
+        return;
+    }
     const QUrl url = mAbsoluteUrl.isValid() ? mAbsoluteUrl : QUrl(mClient.baseUrl() + mPath);
     issue(url);
 }

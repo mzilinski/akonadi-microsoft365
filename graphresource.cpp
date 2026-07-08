@@ -58,6 +58,29 @@ const SpecialFolder kSpecialFolders[] = {
     {"junkemail", SpecialMailCollections::Spam, "spam", "mail-mark-junk"},
     {"outbox", SpecialMailCollections::Outbox, "outbox", "mail-folder-outbox"},
 };
+
+// Graph uses a different endpoint family per collection type; mail is the default.
+enum class CollectionKind {
+    Mail,
+    Calendar,
+    Contacts,
+    Todo,
+};
+
+CollectionKind collectionKind(const Akonadi::Collection &col)
+{
+    const QStringList mimes = col.contentMimeTypes();
+    if (mimes.contains(GraphEventHandler::mimeType())) {
+        return CollectionKind::Calendar;
+    }
+    if (mimes.contains(GraphContactHandler::mimeType())) {
+        return CollectionKind::Contacts;
+    }
+    if (mimes.contains(GraphTodoHandler::mimeType())) {
+        return CollectionKind::Todo;
+    }
+    return CollectionKind::Mail;
+}
 }
 
 GraphResource::GraphResource(const QString &id)
@@ -103,6 +126,23 @@ GraphResource::~GraphResource() = default;
 
 void GraphResource::delayedInit()
 {
+    // Seed the known calendar/contact/todo ids from the local cache so a collection
+    // deleted on the server while the resource was not running is still cleaned up.
+    auto fetch = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive, this);
+    fetch->fetchScope().setResource(identifier());
+    connect(fetch, &CollectionFetchJob::result, this, [this](KJob *job) {
+        if (job->error()) {
+            qCWarning(GRAPH_LOG) << "seeding known collections failed:" << job->errorText();
+            return;
+        }
+        const auto cols = qobject_cast<CollectionFetchJob *>(job)->collections();
+        for (const Collection &col : cols) {
+            if (collectionKind(col) != CollectionKind::Mail) {
+                mKnownExtraIds.insert(col.remoteId());
+            }
+        }
+    });
+
     setUpAuth();
 }
 
@@ -195,8 +235,12 @@ void GraphResource::reloadConfig()
             mAuth->forgetTokens();
         }
         setUpAuth();
-    } else if (mPollTimer && mSettings->pollInterval() > 0) {
-        mPollTimer->start(mSettings->pollInterval() * 60 * 1000);
+    } else if (mPollTimer) {
+        if (mSettings->pollInterval() > 0) {
+            mPollTimer->start(mSettings->pollInterval() * 60 * 1000);
+        } else {
+            mPollTimer->stop();
+        }
     }
 }
 
@@ -236,41 +280,51 @@ void GraphResource::retrieveCollections()
         });
         job->start();
     } else {
-        fetchFolderTree();
+        // Special-folder ids are stable per mailbox; the calendar/contact/todo
+        // collections are cheap to list and must be re-fetched so server-side
+        // additions, renames and deletions show up without a resource restart.
+        fetchExtraCollections();
     }
 }
 
 void GraphResource::fetchExtraCollections()
 {
-    // Calendars + a default contacts collection. Built once; delivered alongside the
-    // mail folders on a full sync. Content mime types drive the retrieveItems dispatch.
+    // Calendars + a default contacts collection, re-fetched on every tree sync and
+    // delivered alongside the mail folders. Content mime types drive the
+    // retrieveItems dispatch.
     auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/calendars?$select=id,name,canEdit,isDefaultCalendar"));
     connect(req, &KJob::result, this, [this, req](KJob *job) {
-        mExtraCollections.clear();
-        if (!job->error()) {
-            for (const auto &v : req->aggregatedValue()) {
-                const QJsonObject cal = v.toObject();
-                const QString id = cal.value(QLatin1String("id")).toString();
-                if (id.isEmpty()) {
-                    continue;
-                }
-                const bool canEdit = cal.value(QLatin1String("canEdit")).toBool();
-                qCDebug(GRAPH_LOG) << "calendar" << cal.value(QLatin1String("name")).toString() << "canEdit" << canEdit << "default"
-                                   << cal.value(QLatin1String("isDefaultCalendar")).toBool();
-                Collection col;
-                col.setRemoteId(id);
-                col.setName(cal.value(QLatin1String("name")).toString());
-                col.setContentMimeTypes({GraphEventHandler::mimeType()});
-                // Read-only calendars advertise read rights only, so KOrganizer won't
-                // even offer editing and no write is ever attempted.
-                col.setRights(canEdit ? Collection::AllRights : Collection::Rights(Collection::ReadOnly));
-                auto *display = col.attribute<EntityDisplayAttribute>(Collection::AddIfMissing);
-                display->setIconName(QStringLiteral("view-calendar"));
-                mExtraCollections.append(col);
+        if (job->error()) {
+            // Keep the previous set: replacing it with a partial one would make the
+            // known-ids diff report the missing collections as deleted on the server.
+            qCWarning(GRAPH_LOG) << "calendar list failed, keeping cached collections:" << job->errorText();
+            fetchFolderTree();
+            return;
+        }
+        Collection::List fresh;
+        for (const auto &v : req->aggregatedValue()) {
+            const QJsonObject cal = v.toObject();
+            const QString id = cal.value(QLatin1String("id")).toString();
+            if (id.isEmpty()) {
+                continue;
             }
-        } else {
-            qCWarning(GRAPH_LOG) << "calendar list failed:" << job->errorText();
+            const bool canEdit = cal.value(QLatin1String("canEdit")).toBool();
+            qCDebug(GRAPH_LOG) << "calendar" << cal.value(QLatin1String("name")).toString() << "canEdit" << canEdit << "default"
+                               << cal.value(QLatin1String("isDefaultCalendar")).toBool();
+            Collection col;
+            col.setRemoteId(id);
+            col.setName(cal.value(QLatin1String("name")).toString());
+            col.setContentMimeTypes({GraphEventHandler::mimeType()});
+            // Read-only calendars advertise read rights only, so KOrganizer won't
+            // even offer editing and no write is ever attempted. Editable ones can
+            // be renamed/deleted (/me/calendars) but cannot contain subfolders.
+            const Collection::Rights editable = Collection::CanChangeItem | Collection::CanCreateItem | Collection::CanDeleteItem
+                | Collection::CanChangeCollection | Collection::CanDeleteCollection;
+            col.setRights(canEdit ? editable : Collection::Rights(Collection::ReadOnly));
+            auto *display = col.attribute<EntityDisplayAttribute>(Collection::AddIfMissing);
+            display->setIconName(QStringLiteral("view-calendar"));
+            fresh.append(col);
         }
 
         // One default contacts collection (/me/contacts).
@@ -278,21 +332,22 @@ void GraphResource::fetchExtraCollections()
         contacts.setRemoteId(QStringLiteral("contacts-default"));
         contacts.setName(i18nc("@item mail folder", "Contacts"));
         contacts.setContentMimeTypes({GraphContactHandler::mimeType()});
-        contacts.setRights(Collection::AllRights);
+        // A single built-in folder: items are editable, the folder itself is not.
+        contacts.setRights(Collection::CanChangeItem | Collection::CanCreateItem | Collection::CanDeleteItem);
         contacts.attribute<EntityDisplayAttribute>(Collection::AddIfMissing)->setIconName(QStringLiteral("view-pim-contacts"));
-        mExtraCollections.append(contacts);
+        fresh.append(contacts);
 
-        fetchTodoListCollections();
+        fetchTodoListCollections(fresh);
     });
     req->start();
 }
 
-void GraphResource::fetchTodoListCollections()
+void GraphResource::fetchTodoListCollections(Akonadi::Collection::List fresh)
 {
     // Task lists (Microsoft To Do): GET /me/todo/lists -> one collection per list.
     auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/todo/lists"));
-    connect(req, &KJob::result, this, [this, req](KJob *job) {
+    connect(req, &KJob::result, this, [this, req, fresh](KJob *job) mutable {
         if (!job->error()) {
             for (const auto &v : req->aggregatedValue()) {
                 const QJsonObject list = v.toObject();
@@ -304,14 +359,18 @@ void GraphResource::fetchTodoListCollections()
                 col.setRemoteId(id);
                 col.setName(list.value(QLatin1String("displayName")).toString());
                 col.setContentMimeTypes({GraphTodoHandler::mimeType()});
-                col.setRights(Collection::AllRights);
+                // Lists can be renamed/deleted (/me/todo/lists) but have no subfolders.
+                col.setRights(Collection::CanChangeItem | Collection::CanCreateItem | Collection::CanDeleteItem | Collection::CanChangeCollection
+                              | Collection::CanDeleteCollection);
                 col.attribute<EntityDisplayAttribute>(Collection::AddIfMissing)->setIconName(QStringLiteral("view-calendar-tasks"));
-                mExtraCollections.append(col);
+                fresh.append(col);
             }
+            mExtraCollections = fresh;
+            qCDebug(GRAPH_LOG) << "resolved" << mExtraCollections.size() << "calendar/contact/todo collections";
         } else {
-            qCWarning(GRAPH_LOG) << "todo list fetch failed:" << job->errorText();
+            // Keep the previous set — see fetchExtraCollections().
+            qCWarning(GRAPH_LOG) << "todo list fetch failed, keeping cached collections:" << job->errorText();
         }
-        qCDebug(GRAPH_LOG) << "resolved" << mExtraCollections.size() << "calendar/contact/todo collections";
         fetchFolderTree();
     });
     req->start();
@@ -373,13 +432,30 @@ void GraphResource::fetchFoldersJobFinished(KJob *job)
         extra.append(col);
     }
 
+    // The extra collections come from plain list requests, not a delta — track their
+    // ids so a calendar/list deleted on the server is reported as removed too.
+    QSet<QString> currentExtraIds;
+    for (const Collection &col : std::as_const(extra)) {
+        currentExtraIds.insert(col.remoteId());
+    }
+
     if (fj->isIncremental()) {
         Collection::List changed = fj->changedCollections();
         for (Collection &col : changed) {
             applySpecialAttributes(col);
         }
         changed.append(extra);
-        collectionsRetrievedIncremental(changed, fj->removedCollections());
+        Collection::List removed = fj->removedCollections();
+        for (const QString &gone : mKnownExtraIds - currentExtraIds) {
+            Collection col;
+            col.setRemoteId(gone);
+            removed.append(col);
+        }
+        if (removed.isEmpty()) {
+            collectionsRetrievedIncremental(changed, removed);
+        } else {
+            deliverIncrementalTree(changed, removed);
+        }
     } else {
         Collection::List cols = fj->allCollections();
         for (Collection &col : cols) {
@@ -389,6 +465,37 @@ void GraphResource::fetchFoldersJobFinished(KJob *job)
         cols.append(extra);
         collectionsRetrieved(cols);
     }
+    mKnownExtraIds = currentExtraIds;
+}
+
+void GraphResource::deliverIncrementalTree(const Akonadi::Collection::List &changed, const Akonadi::Collection::List &removed)
+{
+    // CollectionSync matches a removed collection only inside its parent's bucket, so
+    // a tombstone carrying just the remote id is silently dropped. Resolve each one to
+    // the locally cached collection (whose parent chain is intact) before delivering.
+    auto fetch = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive, this);
+    fetch->fetchScope().setResource(identifier());
+    fetch->fetchScope().setAncestorRetrieval(CollectionFetchScope::Parent);
+    connect(fetch, &CollectionFetchJob::result, this, [this, changed, removed](KJob *job) {
+        Collection::List resolved;
+        if (job->error()) {
+            qCWarning(GRAPH_LOG) << "could not resolve removed collections:" << job->errorText();
+        } else {
+            QHash<QString, Collection> byRid;
+            const auto locals = qobject_cast<CollectionFetchJob *>(job)->collections();
+            for (const Collection &col : locals) {
+                byRid.insert(col.remoteId(), col);
+            }
+            for (const Collection &col : removed) {
+                const auto it = byRid.constFind(col.remoteId());
+                if (it != byRid.constEnd()) {
+                    resolved.append(*it);
+                } // not found locally -> already gone
+            }
+            qCDebug(GRAPH_LOG) << "resolved" << resolved.size() << "of" << removed.size() << "removed collections";
+        }
+        collectionsRetrievedIncremental(changed, resolved);
+    });
 }
 
 void GraphResource::retrieveItems(const Akonadi::Collection &collection)
@@ -859,7 +966,10 @@ void GraphResource::putContactPhotoThenCommit(const Akonadi::Item &item)
 void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &messageId)
 {
     // Find Graph's auto-filed copy in Sent Items by its Internet Message-ID.
-    const QString filter = QStringLiteral("internetMessageId eq '%1'").arg(messageId);
+    // OData string literals escape a single quote by doubling it.
+    QString escapedId = messageId;
+    escapedId.replace(QLatin1Char('\''), QStringLiteral("''"));
+    const QString filter = QStringLiteral("internetMessageId eq '%1'").arg(escapedId);
     auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/mailFolders/sentitems/messages?$select=id&$top=1&$filter=%1").arg(QString::fromUtf8(QUrl::toPercentEncoding(filter))));
     connect(req, &KJob::result, this, [this, item, req](KJob *job) {
@@ -975,10 +1085,29 @@ void GraphResource::itemsRemoved(const Item::List &items)
 
 void GraphResource::collectionAdded(const Collection &collection, const Collection &parent)
 {
-    const bool topLevel = parent.remoteId() == mRootCollection.remoteId();
-    const QString path = topLevel ? QStringLiteral("/me/mailFolders") : QStringLiteral("/me/mailFolders/%1/childFolders").arg(parent.remoteId());
+    QString path;
     QJsonObject body;
-    body.insert(QStringLiteral("displayName"), collection.name());
+    switch (collectionKind(collection)) {
+    case CollectionKind::Calendar:
+        path = QStringLiteral("/me/calendars");
+        body.insert(QStringLiteral("name"), collection.name());
+        break;
+    case CollectionKind::Todo:
+        path = QStringLiteral("/me/todo/lists");
+        body.insert(QStringLiteral("displayName"), collection.name());
+        break;
+    case CollectionKind::Contacts:
+        // Only the single built-in contacts folder is modelled.
+        qCWarning(GRAPH_LOG) << "contact folder creation is not supported; keeping" << collection.name() << "local-only";
+        changeProcessed();
+        return;
+    case CollectionKind::Mail: {
+        const bool topLevel = parent.remoteId() == mRootCollection.remoteId();
+        path = topLevel ? QStringLiteral("/me/mailFolders") : QStringLiteral("/me/mailFolders/%1/childFolders").arg(parent.remoteId());
+        body.insert(QStringLiteral("displayName"), collection.name());
+        break;
+    }
+    }
 
     auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Post);
@@ -1002,11 +1131,28 @@ void GraphResource::collectionChanged(const Collection &collection, const QSet<Q
         changeProcessed(); // only renames are propagated to Graph
         return;
     }
+    QString path;
+    QString nameField = QStringLiteral("displayName");
+    switch (collectionKind(collection)) {
+    case CollectionKind::Calendar:
+        path = QStringLiteral("/me/calendars/%1").arg(collection.remoteId());
+        nameField = QStringLiteral("name");
+        break;
+    case CollectionKind::Todo:
+        path = QStringLiteral("/me/todo/lists/%1").arg(collection.remoteId());
+        break;
+    case CollectionKind::Contacts:
+        changeProcessed(); // the single built-in folder has no server-side name
+        return;
+    case CollectionKind::Mail:
+        path = QStringLiteral("/me/mailFolders/%1").arg(collection.remoteId());
+        break;
+    }
     QJsonObject body;
-    body.insert(QStringLiteral("displayName"), collection.name());
+    body.insert(nameField, collection.name());
     auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Patch);
-    req->setPath(QStringLiteral("/me/mailFolders/%1").arg(collection.remoteId()));
+    req->setPath(path);
     req->setBody(body);
     connect(req, &KJob::result, this, [this, collection](KJob *job) {
         if (job->error()) {
@@ -1020,6 +1166,13 @@ void GraphResource::collectionChanged(const Collection &collection, const QSet<Q
 
 void GraphResource::collectionMoved(const Collection &collection, [[maybe_unused]] const Collection &source, const Collection &destination)
 {
+    if (collectionKind(collection) != CollectionKind::Mail) {
+        // Graph calendars/task lists are flat; the next tree sync re-parents the
+        // collection under the account root again.
+        qCWarning(GRAPH_LOG) << "collection" << collection.name() << "cannot be moved on the server";
+        changeProcessed();
+        return;
+    }
     QJsonObject body;
     body.insert(QStringLiteral("destinationId"), destination.remoteId());
     auto req = new GraphRequest(mClient, this);
@@ -1043,9 +1196,24 @@ void GraphResource::collectionMoved(const Collection &collection, [[maybe_unused
 
 void GraphResource::collectionRemoved(const Collection &collection)
 {
+    QString path;
+    switch (collectionKind(collection)) {
+    case CollectionKind::Calendar:
+        path = QStringLiteral("/me/calendars/%1").arg(collection.remoteId());
+        break;
+    case CollectionKind::Todo:
+        path = QStringLiteral("/me/todo/lists/%1").arg(collection.remoteId());
+        break;
+    case CollectionKind::Contacts:
+        changeProcessed(); // the built-in folder cannot be deleted; contents sync back
+        return;
+    case CollectionKind::Mail:
+        path = QStringLiteral("/me/mailFolders/%1").arg(collection.remoteId());
+        break;
+    }
     auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Delete);
-    req->setPath(QStringLiteral("/me/mailFolders/%1").arg(collection.remoteId()));
+    req->setPath(path);
     connect(req, &KJob::result, this, [this, req](KJob *job) {
         if (job->error() && req->httpStatus() != 404) {
             cancelTask(job->errorText());

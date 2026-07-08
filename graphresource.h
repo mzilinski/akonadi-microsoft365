@@ -120,8 +120,13 @@ private:
     void reconfigureClient();
 
     void fetchFolderTree();
+    // Resolve removed-collection tombstones against the local cache before delivery —
+    // CollectionSync drops removed entries whose parent is unknown.
+    void deliverIncrementalTree(const Akonadi::Collection::List &changed, const Akonadi::Collection::List &removed);
     void fetchExtraCollections(); // calendars + contacts + todo lists
-    void fetchTodoListCollections();
+    // Continues fetchExtraCollections(); mExtraCollections is only replaced once both
+    // list requests have succeeded, so a transient failure cannot surface as deletions.
+    void fetchTodoListCollections(Akonadi::Collection::List fresh);
     // Tag Inbox/Sent/Drafts/Trash/Junk/Outbox as Akonadi special collections so KMail
     // and the unified-mailbox agent treat them correctly. Applied inline during sync.
     void applySpecialAttributes(Akonadi::Collection &col);
@@ -161,5 +166,6 @@ private:
     QString mSentFolderRemoteId; // resolved "Sent Items" folder id (sent reconciliation)
     QHash<QString, int> mSpecialFolderIndex; // remoteId -> kSpecialFolders index
     Akonadi::Collection::List mExtraCollections; // calendars + contacts
+    QSet<QString> mKnownExtraIds; // to report server-side deletions (no delta for these)
     QTimer *mPollTimer = nullptr;
 };

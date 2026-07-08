@@ -5,8 +5,10 @@
 
 #include "graphmtaresource.h"
 
+#include "graph_debug.h"
 #include "graphresourceinterface.h"
 
+#include <KConfigGroup>
 #include <KLocalizedString>
 #include <KMime/Message>
 #include <QDBusConnection>
@@ -29,22 +31,46 @@ bool GraphMtaResource::connectToMasterResource()
     if (mGraphResource) {
         return true;
     }
-    // Find the (first) running Graph receive resource on the session bus. A config
-    // option to pin a specific instance can come with the config dialog.
+    // Which receive resource owns the account this transport sends through. Pinned in
+    // the config; with a single Graph account the instance is adopted automatically.
+    KConfigGroup group(config(), QStringLiteral("General"));
+    const QString pinned = group.readEntry("MasterResource", QString());
+
+    QStringList candidates;
     const QStringList services = QDBusConnection::sessionBus().interface()->registeredServiceNames().value();
     for (const QString &service : services) {
-        if (!service.startsWith(kResourceServicePrefix)) {
-            continue;
+        if (service.startsWith(kResourceServicePrefix)) {
+            candidates.append(service);
         }
-        auto iface = new OrgKdeAkonadiGraphResourceInterface(service, QStringLiteral("/"), QDBusConnection::sessionBus(), this);
-        if (iface->isValid()) {
-            mGraphResource = iface;
-            connect(mGraphResource, &OrgKdeAkonadiGraphResourceInterface::messageSent, this, &GraphMtaResource::messageSent);
-            return true;
-        }
-        delete iface;
     }
-    return false;
+    const QLatin1String serviceBase("org.freedesktop.Akonadi.Resource.");
+    QString service;
+    if (!pinned.isEmpty()) {
+        service = serviceBase + pinned;
+        if (!candidates.contains(service)) {
+            qCWarning(GRAPH_LOG) << "configured master resource" << pinned << "is not running";
+            return false;
+        }
+    } else if (candidates.size() == 1) {
+        service = candidates.first();
+        // Remember the choice so a second account added later cannot silently
+        // re-route this transport to the wrong mailbox.
+        group.writeEntry("MasterResource", service.mid(serviceBase.size()));
+        group.sync();
+    } else {
+        qCWarning(GRAPH_LOG) << (candidates.isEmpty() ? "no Graph resource is running" : "several Graph resources are running")
+                             << "and no MasterResource is configured in" << config()->name();
+        return false;
+    }
+
+    auto iface = new OrgKdeAkonadiGraphResourceInterface(service, QStringLiteral("/"), QDBusConnection::sessionBus(), this);
+    if (!iface->isValid()) {
+        delete iface;
+        return false;
+    }
+    mGraphResource = iface;
+    connect(mGraphResource, &OrgKdeAkonadiGraphResourceInterface::messageSent, this, &GraphMtaResource::messageSent);
+    return true;
 }
 
 void GraphMtaResource::sendItem(const Akonadi::Item &item)
