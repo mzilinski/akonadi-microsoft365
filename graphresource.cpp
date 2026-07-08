@@ -540,7 +540,7 @@ void GraphResource::itemsFlagsChanged(const Item::List &items,
     job->start();
 }
 
-void GraphResource::itemChanged(const Item &item, [[maybe_unused]] const QSet<QByteArray> &partIdentifiers)
+void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partIdentifiers)
 {
     const QString mime = item.mimeType();
     if (mime == GraphEventHandler::mimeType() && item.hasPayload<KCalendarCore::Incidence::Ptr>()) {
@@ -562,8 +562,92 @@ void GraphResource::itemChanged(const Item &item, [[maybe_unused]] const QSet<QB
             return;
         }
     }
-    // Mail: Graph cannot replace an existing message's MIME in place. Accept locally.
+    // Mail: Graph cannot replace an existing message's MIME in place. For a draft the
+    // updated MIME is the complete truth, so recreate it: POST the new MIME (which
+    // Graph only accepts as a draft — exactly what we want), then delete the old copy.
+    if (mime == GraphMailHandler::mimeType() && partIdentifiers.contains(QByteArrayLiteral("PLD:RFC822"))
+        && item.hasPayload<std::shared_ptr<KMime::Message>>() && isDraftsCollection(item.parentCollection())) {
+        replaceDraft(item);
+        return;
+    }
+    // Other mail edits (attribute-only changes, non-draft folders) stay local-only.
     changeProcessed();
+}
+
+bool GraphResource::isDraftsCollection(const Akonadi::Collection &col) const
+{
+    const auto it = mSpecialFolderIndex.constFind(col.remoteId());
+    return it != mSpecialFolderIndex.constEnd() && qstrcmp(kSpecialFolders[it.value()].attributeType, "drafts") == 0;
+}
+
+void GraphResource::replaceDraft(const Akonadi::Item &item)
+{
+    const auto [rawMime, contentType] = GraphMailHandler::createFromMime(item);
+    if (rawMime.isEmpty()) {
+        changeProcessed();
+        return;
+    }
+    // Create first, delete afterwards — a failure in between must never lose content.
+    createMimeMessage(rawMime, contentType, item.parentCollection().remoteId(), [this, item](const QString &newId, const QString &error) {
+        if (newId.isEmpty()) {
+            cancelTask(error);
+            return;
+        }
+        auto del = new GraphRequest(mClient, this);
+        del->setMethod(GraphRequest::Delete);
+        del->setPath(QStringLiteral("/me/messages/%1").arg(item.remoteId()));
+        connect(del, &KJob::result, this, [this, item, newId, del](KJob *dj) {
+            if (dj->error() && del->httpStatus() != 404) {
+                // The new draft exists; committing it is still right. The stale copy
+                // will surface in the next delta and can be deleted by the user.
+                qCWarning(GRAPH_LOG) << "could not delete the old draft" << item.remoteId() << ":" << dj->errorText();
+            }
+            Item newItem(item);
+            newItem.setRemoteId(newId);
+            changeCommitted(newItem);
+        });
+        del->start();
+    });
+}
+
+void GraphResource::createMimeMessage(const QByteArray &rawMime,
+                                      const QByteArray &contentType,
+                                      const QString &targetFolderRid,
+                                      const std::function<void(const QString &, const QString &)> &done)
+{
+    // Graph ingests MIME only on the unscoped /me/messages endpoint — the folder-scoped
+    // variant rejects the identical body with HTTP 400 UnableToDeserializePostBody. The
+    // message therefore always appears as a draft in the Drafts folder first and has to
+    // be moved when the target is some other folder (a move assigns a new id).
+    auto create = new GraphRequest(mClient, this);
+    create->setMethod(GraphRequest::Post);
+    create->setPath(QStringLiteral("/me/messages"));
+    create->setRawBody(rawMime, contentType);
+    connect(create, &KJob::result, this, [this, targetFolderRid, done, create](KJob *job) {
+        if (job->error()) {
+            done(QString(), job->errorText());
+            return;
+        }
+        const QJsonObject response = create->responseObject();
+        const QString id = response.value(QLatin1String("id")).toString();
+        if (response.value(QLatin1String("parentFolderId")).toString() == targetFolderRid) {
+            done(id, QString());
+            return;
+        }
+        auto move = new GraphRequest(mClient, this);
+        move->setMethod(GraphRequest::Post);
+        move->setPath(QStringLiteral("/me/messages/%1/move").arg(id));
+        move->setBody(QJsonObject{{QStringLiteral("destinationId"), targetFolderRid}});
+        connect(move, &KJob::result, this, [move, done](KJob *mj) {
+            if (mj->error()) {
+                done(QString(), mj->errorText());
+                return;
+            }
+            done(move->responseObject().value(QLatin1String("id")).toString(), QString());
+        });
+        move->start();
+    });
+    create->start();
 }
 
 void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body)
@@ -643,21 +727,15 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
         changeProcessed();
         return;
     }
-    // POST base64 MIME -> creates the message (as draft) in the target folder.
-    auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Post);
-    req->setPath(QStringLiteral("/me/mailFolders/%1/messages").arg(collection.remoteId()));
-    req->setRawBody(rawMime, contentType);
-    connect(req, &KJob::result, this, [this, item, req](KJob *job) {
-        if (job->error()) {
-            cancelTask(job->errorText());
+    createMimeMessage(rawMime, contentType, collection.remoteId(), [this, item](const QString &newId, const QString &error) {
+        if (newId.isEmpty()) {
+            cancelTask(error);
             return;
         }
         Item newItem(item);
-        newItem.setRemoteId(req->responseObject().value(QLatin1String("id")).toString());
+        newItem.setRemoteId(newId);
         changeCommitted(newItem);
     });
-    req->start();
 }
 
 void GraphResource::postPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body)

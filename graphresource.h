@@ -18,6 +18,7 @@
 
 #include <QJsonObject>
 
+#include <functional>
 #include <memory>
 
 class GraphSettings;
@@ -126,6 +127,14 @@ private:
     void applySpecialAttributes(Akonadi::Collection &col);
     // Adopt Graph's server-side sent copy instead of creating a duplicate.
     void reconcileSentItem(const Akonadi::Item &item, const QString &messageId);
+    // Draft edits: Graph cannot replace MIME in place — recreate the draft, drop the old one.
+    [[nodiscard]] bool isDraftsCollection(const Akonadi::Collection &col) const;
+    void replaceDraft(const Akonadi::Item &item);
+    // MIME ingestion; calls done(remoteId, errorText) with an empty id on failure.
+    void createMimeMessage(const QByteArray &rawMime,
+                           const QByteArray &contentType,
+                           const QString &targetFolderRid,
+                           const std::function<void(const QString &, const QString &)> &done);
     // Calendar/contact change replay helpers.
     void postPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body);
     // Contact photos live on a separate endpoint; upload after the JSON write, then commit.
