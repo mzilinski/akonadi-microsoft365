@@ -38,6 +38,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
             Widgets
     )
     find_package(KF6Config ${KF_MIN_VERSION} CONFIG REQUIRED)
+    find_package(KF6CoreAddons ${KF_MIN_VERSION} CONFIG REQUIRED)
     find_package(KF6I18n ${KF_MIN_VERSION} CONFIG REQUIRED)
     find_package(KF6Mime CONFIG REQUIRED)
     find_package(KF6CalendarCore CONFIG REQUIRED)
@@ -65,7 +66,6 @@ ecm_qt_declare_logging_category(graph_common_SRCS
 # ---- receiving resource ----------------------------------------------------
 set(graphresource_SRCS
     graphresource.cpp
-    graphconfigdialog.cpp
     graphsyncstateattribute.cpp
     mail/graphmailhandler.cpp
     calendar/grapheventhandler.cpp
@@ -76,7 +76,6 @@ set(graphresource_SRCS
     jobs/graphfetchitempayloadjob.cpp
     jobs/graphfetchpimitemsjob.cpp
     graphresource.h
-    graphconfigdialog.h
     graphsyncstateattribute.h
     mail/graphmailhandler.h
     calendar/grapheventhandler.h
@@ -151,6 +150,20 @@ if(HAVE_SEPARATE_MTA_RESOURCE)
         graphclient
     )
 endif()
+
+# ---- config plugin (loaded by the client's agent configuration dialog) ------
+kcoreaddons_add_plugin(graphconfig
+    INSTALL_NAMESPACE "pim6/akonadi/config"
+)
+target_sources(graphconfig PRIVATE graphconfig.cpp)
+target_link_libraries(
+    graphconfig
+    PUBLIC
+        KPim6::AkonadiCore
+        KF6::ConfigCore
+        KF6::I18n
+        Qt::Widgets
+)
 
 # ---- smoke test (standalone builds only, not installed) ---------------------
 # End-to-end check of the client layer + sync jobs against a real tenant;

@@ -8,7 +8,6 @@
 
 #include "graph_debug.h"
 #include "graphclient/auth/graphoauth.h"
-#include "graphconfigdialog.h"
 #include "graphresourceadaptor.h"
 #include "graphsettingsbase.h"
 #include "graphsyncstateattribute.h"
@@ -35,10 +34,8 @@
 #include <Akonadi/SpecialMailCollections>
 #include <KLocalizedString>
 #include <KMime/Message>
-#include <QPointer>
 #include <QTimer>
 #include <QUrl>
-#include <QWindow>
 
 using namespace Akonadi;
 
@@ -90,6 +87,9 @@ GraphResource::GraphResource(const QString &id)
     connect(this, &AgentBase::error, this, [](const QString &msg) {
         qCWarning(GRAPH_LOG) << "AgentBase error:" << msg;
     });
+    // The config dialog runs as a plugin in the client process (graphconfig.cpp);
+    // this fires after it saved the new settings.
+    connect(this, &AgentBase::reloadConfiguration, this, &GraphResource::reloadConfig);
 
     QMetaObject::invokeMethod(this, &GraphResource::delayedInit, Qt::QueuedConnection);
 }
@@ -154,36 +154,25 @@ void GraphResource::doSetOnline(bool online)
     }
 }
 
-void GraphResource::configure(WId windowId)
+void GraphResource::reloadConfig()
 {
     const QString oldTenant = mSettings->tenantId();
     const QString oldClient = mSettings->clientId();
 
-    QPointer<GraphConfigDialog> dlg = new GraphConfigDialog(mSettings.data(), name());
-    if (windowId) {
-        // Force a native window so windowHandle() exists before show(); otherwise the
-        // dialog cannot be made transient for the caller's window (given only as a WId).
-        dlg->setAttribute(Qt::WA_NativeWindow, true);
-        if (dlg->windowHandle()) {
-            dlg->windowHandle()->setTransientParent(QWindow::fromWinId(windowId));
+    // The graphconfig plugin wrote the file from the client process.
+    mSettings->sharedConfig()->reparseConfiguration();
+    mSettings->load();
+    mFolderDeltaLink = mSettings->folderDeltaLink();
+
+    // A different tenant/client id invalidates the stored token — sign in again.
+    if (mSettings->tenantId() != oldTenant || mSettings->clientId() != oldClient) {
+        if (mAuth) {
+            mAuth->forgetTokens();
         }
+        setUpAuth();
+    } else if (mPollTimer && mSettings->pollInterval() > 0) {
+        mPollTimer->start(mSettings->pollInterval() * 60 * 1000);
     }
-    if (dlg->exec() == QDialog::Accepted) {
-        if (!dlg->displayName().isEmpty() && dlg->displayName() != name()) {
-            setName(dlg->displayName());
-        }
-        // A different tenant/client id invalidates the stored token — sign in again.
-        if (mSettings->tenantId() != oldTenant || mSettings->clientId() != oldClient) {
-            if (mAuth) {
-                mAuth->forgetTokens();
-            }
-            setUpAuth();
-        }
-        Q_EMIT configurationDialogAccepted();
-    } else {
-        Q_EMIT configurationDialogRejected();
-    }
-    delete dlg;
 }
 
 // ============================================================================

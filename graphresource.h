@@ -89,9 +89,6 @@ Q_SIGNALS:
 protected:
     void doSetOnline(bool online) override;
 
-public Q_SLOTS:
-    void configure(WId windowId) override;
-
 protected Q_SLOTS:
     // --- Synchronisation (Graph -> local) ------------------------------------
     /// Full/delta folder list: GET /me/mailFolders/delta -> collectionsRetrieved[Incremental]().
@@ -103,6 +100,8 @@ protected Q_SLOTS:
 
 private Q_SLOTS:
     void delayedInit();
+    // Config was changed from outside (graphconfig plugin in the client process).
+    void reloadConfig();
     void onAuthReady();
     void onAuthFailed(const QString &error);
 
