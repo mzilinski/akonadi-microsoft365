@@ -118,6 +118,22 @@ private Q_SLOTS:
 private:
     void setUpAuth();
     void reconfigureClient();
+    // Entered once the one-time remoteId migration has run (see onAuthReady).
+    void startSyncing();
+    // Incremental delivery with tombstones resolved against the local cache and the
+    // deltaLink persisted only after the ItemSync committed (both via own ItemSync —
+    // itemsRetrievedIncremental() cannot sequence the save after the commit).
+    void deliverItemsIncremental(const Akonadi::Collection &collection,
+                                 const Akonadi::Item::List &changed,
+                                 const Akonadi::Item::List &removed,
+                                 const QString &deltaLink);
+    void syncItemsIncremental(const Akonadi::Collection &collection,
+                              const Akonadi::Item::List &changed,
+                              const Akonadi::Item::List &removed,
+                              const QString &deltaLink);
+    // Deliver on-demand payloads on freshly fetched items so the store cannot race
+    // a concurrent delta (revision conflict) or clobber newer flags.
+    void deliverFreshPayloads(const Akonadi::Item::List &filled);
 
     void fetchFolderTree();
     // Resolve removed-collection tombstones against the local cache before delivery —

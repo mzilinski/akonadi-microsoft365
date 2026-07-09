@@ -23,5 +23,9 @@
       <label>Delta poll interval in minutes (no push on Graph for desktop).</label>
       <default>5</default>
     </entry>
+    <entry name="ImmutableIdsMigrated" type="Bool">
+      <label>Whether stored remoteIds have been migrated to Graph immutable ids.</label>
+      <default>false</default>
+    </entry>
   </group>
 </kcfg>

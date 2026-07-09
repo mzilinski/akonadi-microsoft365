@@ -76,6 +76,7 @@ set(graphresource_SRCS
     jobs/graphfetchitemsjob.cpp
     jobs/graphfetchitempayloadjob.cpp
     jobs/graphfetchpimitemsjob.cpp
+    jobs/graphmigrateidsjob.cpp
     graphresource.h
     graphsyncstateattribute.h
     mail/graphmailhandler.h
@@ -87,6 +88,7 @@ set(graphresource_SRCS
     jobs/graphfetchitemsjob.h
     jobs/graphfetchitempayloadjob.h
     jobs/graphfetchpimitemsjob.h
+    jobs/graphmigrateidsjob.h
     ${graph_common_SRCS}
 )
 

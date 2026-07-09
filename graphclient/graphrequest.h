@@ -42,6 +42,11 @@ public:
     void setRawBody(const QByteArray &body, const QByteArray &contentType);
     void setFollowPaging(bool follow); // aggregate @odata.value across nextLinks
     void setExpectRawPayload(bool raw); // for /$value (returns MIME bytes, not JSON)
+    // Requests ask for immutable item ids by default (IdType="ImmutableId"). Opt out
+    // for listings whose returned ids serve as *collection* remoteIds: unlike
+    // mailFolders, /me/calendars ids do change under IdType, and the stored
+    // collection remoteIds are not migrated.
+    void setUseImmutableIds(bool use);
     void addHeader(const QByteArray &name, const QByteArray &value); // e.g. Prefer
 
     void start() override;
@@ -52,6 +57,7 @@ public:
     [[nodiscard]] QByteArray rawPayload() const; // when setExpectRawPayload(true)
     [[nodiscard]] QString deltaLink() const; // @odata.deltaLink from the final page (if any)
     [[nodiscard]] int httpStatus() const; // HTTP status of the (last) reply
+    [[nodiscard]] QString graphErrorCode() const; // "error.code" from a Graph error body
 
 private Q_SLOTS:
     void onReplyFinished();
@@ -69,11 +75,13 @@ private:
     QList<QPair<QByteArray, QByteArray>> mHeaders;
     bool mFollowPaging = true;
     bool mExpectRaw = false;
+    bool mUseImmutableIds = true;
 
     QJsonObject mResponseObject;
     QJsonArray mAggregated;
     QByteArray mRawPayload;
     QString mDeltaLink;
+    QString mGraphErrorCode;
     int mRetryCount = 0;
     int mHttpStatus = 0;
 };

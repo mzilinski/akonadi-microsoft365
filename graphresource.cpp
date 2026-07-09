@@ -19,6 +19,7 @@
 #include "jobs/graphfetchitempayloadjob.h"
 #include "jobs/graphfetchitemsjob.h"
 #include "jobs/graphfetchpimitemsjob.h"
+#include "jobs/graphmigrateidsjob.h"
 #include "mail/graphmailhandler.h"
 #include "todo/graphtodohandler.h"
 
@@ -30,7 +31,9 @@
 #include <Akonadi/CollectionFetchScope>
 #include <Akonadi/CollectionModifyJob>
 #include <Akonadi/EntityDisplayAttribute>
+#include <Akonadi/ItemFetchJob>
 #include <Akonadi/ItemFetchScope>
+#include <Akonadi/ItemSync>
 #include <Akonadi/SpecialCollectionAttribute>
 #include <Akonadi/SpecialMailCollections>
 #include <KLocalizedString>
@@ -163,6 +166,35 @@ void GraphResource::onAuthReady()
 {
     qCDebug(GRAPH_LOG) << "auth ready, starting collection tree sync";
     reconfigureClient();
+
+    // Every request now asks Graph for immutable ids (see GraphRequest::issue), so
+    // remoteIds stored by earlier versions must be translated first — a delta that
+    // returns unknown id forms would duplicate the whole mailbox. Runs once; a fresh
+    // account has nothing to translate and just sets the flag.
+    if (!mSettings->immutableIdsMigrated()) {
+        Q_EMIT status(Running, i18nc("@info:status", "Migrating item identifiers"));
+        auto job = new GraphMigrateIdsJob(mClient, identifier(), this);
+        connect(job, &KJob::result, this, [this](KJob *job) {
+            if (job->error()) {
+                qCWarning(GRAPH_LOG) << "id migration failed:" << job->errorText();
+                Q_EMIT status(Broken, i18nc("@info:status", "Failed to migrate item identifiers: %1", job->errorText()));
+                // Retry on the poll interval; syncing before the migration is done is
+                // blocked in retrieveCollections()/retrieveItems().
+                QTimer::singleShot(mSettings->pollInterval() * kMillisecondsPerMinute, this, &GraphResource::onAuthReady);
+                return;
+            }
+            mSettings->setImmutableIdsMigrated(true);
+            mSettings->save();
+            startSyncing();
+        });
+        job->start();
+        return;
+    }
+    startSyncing();
+}
+
+void GraphResource::startSyncing()
+{
     Q_EMIT status(Idle, i18nc("@info:status", "Ready"));
     synchronizeCollectionTree();
 
@@ -251,6 +283,11 @@ void GraphResource::reloadConfig()
 
 void GraphResource::retrieveCollections()
 {
+    // Syncing with un-migrated remoteIds would duplicate everything (see onAuthReady).
+    if (!mSettings->immutableIdsMigrated()) {
+        cancelTask(i18n("Waiting for the item identifier migration to finish"));
+        return;
+    }
     // Resolve the well-known folder ids once per session, then fetch the folder tree.
     // The special-folder attributes are applied inline while delivering collections
     // (below), so the normal collection sync persists them — no extra modify jobs.
@@ -295,6 +332,9 @@ void GraphResource::fetchExtraCollections()
     // retrieveItems dispatch.
     auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/calendars?$select=id,name,canEdit,isDefaultCalendar"));
+    // Calendar ids become collection remoteIds and must stay in the traditional form —
+    // IdType would rewrite them and the tree sync would see all calendars as replaced.
+    req->setUseImmutableIds(false);
     connect(req, &KJob::result, this, [this, req](KJob *job) {
         if (job->error()) {
             // Keep the previous set: replacing it with a partial one would make the
@@ -501,6 +541,10 @@ void GraphResource::deliverIncrementalTree(const Akonadi::Collection::List &chan
 
 void GraphResource::retrieveItems(const Akonadi::Collection &collection)
 {
+    if (!mSettings->immutableIdsMigrated()) {
+        cancelTask(i18n("Waiting for the item identifier migration to finish"));
+        return;
+    }
     const QStringList mimeTypes = collection.contentMimeTypes();
     if (mimeTypes.contains(GraphEventHandler::mimeType()) || mimeTypes.contains(GraphContactHandler::mimeType())
         || mimeTypes.contains(GraphTodoHandler::mimeType())) {
@@ -528,10 +572,10 @@ void GraphResource::fetchItemsJobFinished(KJob *job)
         return;
     }
     auto *fj = qobject_cast<GraphFetchItemsJob *>(job);
-    saveCollectionDeltaLink(fj->collection(), fj->deltaLink());
-
+    qCDebug(GRAPH_LOG) << "mail delta" << fj->collection().name() << "changed:" << fj->changedItems().size() << "removed:" << fj->removedItems().size()
+                       << "deltaLink:" << (fj->deltaLink().isEmpty() ? "none" : "present");
     // Delta returns light stubs (id/flags); payload is fetched on demand below.
-    itemsRetrievedIncremental(fj->changedItems(), fj->removedItems());
+    deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink());
 }
 
 void GraphResource::fetchPimItemsJobFinished(KJob *job)
@@ -542,10 +586,63 @@ void GraphResource::fetchPimItemsJobFinished(KJob *job)
     }
     auto *fj = qobject_cast<GraphFetchPimItemsJob *>(job);
     qCDebug(GRAPH_LOG) << "pim delta" << fj->collection().name() << "changed:" << fj->changedItems().size() << "removed:" << fj->removedItems().size()
-                       << "deltaLink:" << (fj->deltaLink().isEmpty() ? "none" : "stored");
-    saveCollectionDeltaLink(fj->collection(), fj->deltaLink());
-    // Incremental: unmentioned items are kept, @removed tombstones are removed.
-    itemsRetrievedIncremental(fj->changedItems(), fj->removedItems());
+                       << "deltaLink:" << (fj->deltaLink().isEmpty() ? "none" : "present");
+    deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink());
+}
+
+void GraphResource::deliverItemsIncremental(const Collection &collection, const Item::List &changed, const Item::List &removed, const QString &deltaLink)
+{
+    // Deltas may tombstone items this cache never saw (removed server-side between two
+    // polls, or emitted under a different id encoding by old Graph responses). ItemSync
+    // aborts on such deletes, which would wedge the collection: the deltaLink is only
+    // advanced after a successful commit, so the same tombstone would fail every poll.
+    if (!removed.isEmpty()) {
+        auto known = new ItemFetchJob(collection, this);
+        known->fetchScope().setFetchModificationTime(false);
+        connect(known, &ItemFetchJob::result, this, [this, collection, changed, removed, deltaLink, known](KJob *job) {
+            if (job->error()) {
+                cancelTask(job->errorText());
+                return;
+            }
+            QSet<QString> localRids;
+            const auto items = known->items();
+            for (const Item &item : items) {
+                localRids.insert(item.remoteId());
+            }
+            Item::List knownRemoved;
+            for (const Item &item : removed) {
+                if (localRids.contains(item.remoteId())) {
+                    knownRemoved.append(item);
+                }
+            }
+            if (knownRemoved.size() != removed.size()) {
+                qCDebug(GRAPH_LOG) << "dropping" << removed.size() - knownRemoved.size() << "tombstones for items not in the local cache";
+            }
+            syncItemsIncremental(collection, changed, knownRemoved, deltaLink);
+        });
+        return;
+    }
+    syncItemsIncremental(collection, changed, removed, deltaLink);
+}
+
+void GraphResource::syncItemsIncremental(const Collection &collection, const Item::List &changed, const Item::List &removed, const QString &deltaLink)
+{
+    // Run the ItemSync ourselves instead of via itemsRetrievedIncremental() so the
+    // deltaLink is persisted only after the local commit succeeded. Saving it upfront
+    // (as ResourceBase's flow forces) silently loses the whole batch when the commit
+    // fails: the next delta starts after the never-applied changes.
+    auto sync = new ItemSync(collection, {}, this);
+    sync->setTransactionMode(ItemSync::SingleTransaction);
+    // Connect before feeding: an empty delta finishes inside setIncrementalSyncItems().
+    connect(sync, &ItemSync::result, this, [this, collection, deltaLink](KJob *job) {
+        if (job->error()) {
+            cancelTask(job->errorText());
+            return;
+        }
+        saveCollectionDeltaLink(collection, deltaLink);
+        itemsRetrievalDone();
+    });
+    sync->setIncrementalSyncItems(changed, removed);
 }
 
 bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unused]] const QSet<QByteArray> &parts)
@@ -596,7 +693,7 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unus
                         pending->append(filled);
                     }
                     if (--(*remaining) == 0) {
-                        itemsRetrieved(*pending);
+                        deliverFreshPayloads(*pending);
                     }
                 });
                 req->start();
@@ -620,7 +717,44 @@ void GraphResource::fetchPayloadJobFinished(KJob *job)
         return;
     }
     auto *fj = qobject_cast<GraphFetchItemPayloadJob *>(job);
-    itemsRetrieved(fj->items());
+    deliverFreshPayloads(fj->items());
+}
+
+void GraphResource::deliverFreshPayloads(const Item::List &filled)
+{
+    if (filled.isEmpty()) {
+        cancelTask(i18n("The requested items no longer exist"));
+        return;
+    }
+    // The items in a retrieval request carry the revision from when the request was
+    // queued; a delta poll delivering e.g. a read-state change in the meantime bumps
+    // it and the payload store then aborts with a revision conflict. Deliver on
+    // freshly fetched items instead: only the payload is marked dirty, so the store
+    // touches neither flags nor anything else, and the revision is current.
+    auto fetch = new ItemFetchJob(filled, this);
+    fetch->fetchScope().setFetchModificationTime(false);
+    fetch->fetchScope().setAncestorRetrieval(ItemFetchScope::Parent);
+    connect(fetch, &ItemFetchJob::result, this, [this, filled, fetch](KJob *job) {
+        if (job->error()) {
+            cancelTask(job->errorText());
+            return;
+        }
+        QHash<Item::Id, const Item *> byId;
+        for (const Item &item : filled) {
+            byId.insert(item.id(), &item);
+        }
+        Item::List fresh = fetch->items();
+        for (Item &item : fresh) {
+            if (const Item *source = byId.value(item.id())) {
+                item.setPayloadFromData(source->payloadData());
+            }
+        }
+        if (fresh.isEmpty()) {
+            cancelTask(i18n("The requested items no longer exist"));
+            return;
+        }
+        itemsRetrieved(fresh);
+    });
 }
 
 // ============================================================================

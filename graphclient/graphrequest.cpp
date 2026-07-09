@@ -43,6 +43,10 @@ void GraphRequest::setExpectRawPayload(bool raw)
 {
     mExpectRaw = raw;
 }
+void GraphRequest::setUseImmutableIds(bool use)
+{
+    mUseImmutableIds = use;
+}
 void GraphRequest::addHeader(const QByteArray &name, const QByteArray &value)
 {
     mHeaders.append({name, value});
@@ -83,8 +87,24 @@ void GraphRequest::issue(const QUrl &url)
     if (!mContentType.isEmpty()) {
         req.setHeader(QNetworkRequest::ContentTypeHeader, mContentType);
     }
+    // Ask for immutable ids so stored remoteIds survive moves and never flip between
+    // Graph's two mutable encodings of the same message ("AAMk…" vs "AQMk…", which
+    // broke delta tombstone matching). Preference values must share one header line,
+    // so fold any caller-supplied Prefer entries (timezone, maxpagesize) into it.
+    // Microsoft To Do has a separate id space that IdType must not switch.
+    QByteArray prefer;
+    if (mUseImmutableIds && !url.path().contains(QLatin1String("/me/todo"))) {
+        prefer = "IdType=\"ImmutableId\"";
+    }
     for (const auto &[name, value] : std::as_const(mHeaders)) {
-        req.setRawHeader(name, value);
+        if (name == "Prefer") {
+            prefer += (prefer.isEmpty() ? "" : ", ") + value;
+        } else {
+            req.setRawHeader(name, value);
+        }
+    }
+    if (!prefer.isEmpty()) {
+        req.setRawHeader("Prefer", prefer);
     }
 
     QNetworkAccessManager *nam = mClient.networkAccessManager();
@@ -128,6 +148,7 @@ void GraphRequest::onReplyFinished()
     if (reply->error() != QNetworkReply::NoError) {
         // Graph error bodies carry the useful message: { "error": { "code", "message" } }.
         const QJsonObject err = QJsonDocument::fromJson(reply->readAll()).object().value(QLatin1String("error")).toObject();
+        mGraphErrorCode = err.value(QLatin1String("code")).toString();
         setError(KJob::UserDefinedError);
         if (!err.isEmpty()) {
             setErrorText(i18nc("%1 is the server error message, %2 the HTTP status code, %3 the server error code",
@@ -198,6 +219,10 @@ QString GraphRequest::deltaLink() const
 int GraphRequest::httpStatus() const
 {
     return mHttpStatus;
+}
+QString GraphRequest::graphErrorCode() const
+{
+    return mGraphErrorCode;
 }
 
 #include "moc_graphrequest.cpp"
