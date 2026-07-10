@@ -25,13 +25,14 @@ class GraphRequest : public KJob
 {
     Q_OBJECT
 public:
-    enum Method {
+    enum class Method : uint8_t {
         Get,
         Post,
         Put,
         Patch,
         Delete
     };
+    Q_ENUM(Method)
 
     GraphRequest(GraphClient &client, QObject *parent = nullptr);
 
@@ -59,15 +60,13 @@ public:
     [[nodiscard]] int httpStatus() const; // HTTP status of the (last) reply
     [[nodiscard]] QString graphErrorCode() const; // "error.code" from a Graph error body
 
-private Q_SLOTS:
-    void onReplyFinished();
-
 private:
+    void onReplyFinished();
     void issue(const QUrl &url);
     void scheduleRetry(int seconds, const QUrl &url); // 429 backoff
 
     GraphClient &mClient;
-    Method mMethod = Get;
+    Method mMethod = Method::Get;
     QString mPath;
     QUrl mAbsoluteUrl;
     QByteArray mBody;

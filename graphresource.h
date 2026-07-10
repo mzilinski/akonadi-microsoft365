@@ -101,7 +101,7 @@ protected Q_SLOTS:
     /// On-demand payloads: GET /me/messages/{id}/$value -> KMime, then itemsRetrieved().
     bool retrieveItems(const Akonadi::Item::List &items, const QSet<QByteArray> &parts) override;
 
-private Q_SLOTS:
+private:
     void delayedInit();
     // Config was changed from outside (graphconfig plugin in the client process).
     void reloadConfig();
@@ -115,7 +115,6 @@ private Q_SLOTS:
     void fetchPimItemsJobFinished(KJob *job);
     void fetchPayloadJobFinished(KJob *job);
 
-private:
     void setUpAuth();
     void reconfigureClient();
     // Entered once the one-time remoteId migration has run (see onAuthReady).

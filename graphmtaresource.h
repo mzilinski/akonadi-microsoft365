@@ -42,10 +42,8 @@ protected Q_SLOTS:
         return false;
     }
 
-private Q_SLOTS:
-    void messageSent(const QString &id, const QString &error);
-
 private:
+    void messageSent(const QString &id, const QString &error);
     [[nodiscard]] bool connectToMasterResource();
 
     OrgKdeAkonadiGraphResourceInterface *mGraphResource = nullptr;

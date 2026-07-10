@@ -28,10 +28,8 @@ public:
     [[nodiscard]] Akonadi::Item::List removedItems() const;
     [[nodiscard]] QString deltaLink() const;
 
-private Q_SLOTS:
-    void onRequestFinished(KJob *);
-
 private:
+    void onRequestFinished(KJob *);
     [[nodiscard]] Akonadi::Item itemStubFromJson(const QJsonObject &message) const;
 
     GraphClient &mClient;

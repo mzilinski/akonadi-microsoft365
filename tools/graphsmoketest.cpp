@@ -140,7 +140,7 @@ int main(int argc, char **argv)
         const Item &item = stubs.first();
         QJsonObject body;
         body.insert(QStringLiteral("isRead"), item.hasFlag(MessageFlags::Seen));
-        auto patchJob = new GraphBatchJob(client, {{GraphRequest::Patch, QStringLiteral("/me/messages/%1").arg(item.remoteId()), body}});
+        auto patchJob = new GraphBatchJob(client, {{GraphRequest::Method::Patch, QStringLiteral("/me/messages/%1").arg(item.remoteId()), body}});
         if (runJob(patchJob, "GraphBatchJob (PATCH flags)")) {
             std::printf("OK    %-28s isRead re-asserted\n", "GraphBatchJob (PATCH flags)");
         } else {
@@ -157,14 +157,14 @@ int main(int argc, char **argv)
         msg.assemble();
 
         auto createReq = new GraphRequest(client);
-        createReq->setMethod(GraphRequest::Post);
+        createReq->setMethod(GraphRequest::Method::Post);
         createReq->setPath(QStringLiteral("/me/messages"));
         createReq->setRawBody(msg.encodedContent(KMime::NewlineType::CRLF).toBase64(), QByteArrayLiteral("text/plain"));
         if (runJob(createReq, "draft create (POST MIME)")) {
             const QString draftId = createReq->responseObject().value(QLatin1String("id")).toString();
             std::printf("OK    %-28s id: %s...\n", "draft create (POST MIME)", qPrintable(draftId.left(20)));
 
-            auto delJob = new GraphBatchJob(client, {{GraphRequest::Delete, QStringLiteral("/me/messages/%1").arg(draftId), {}}});
+            auto delJob = new GraphBatchJob(client, {{GraphRequest::Method::Delete, QStringLiteral("/me/messages/%1").arg(draftId), {}}});
             if (runJob(delJob, "draft delete (DELETE)")) {
                 std::printf("OK    %-28s cleaned up\n", "draft delete (DELETE)");
             } else {

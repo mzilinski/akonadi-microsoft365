@@ -30,11 +30,9 @@ public:
     /// Root collection with its remoteId resolved to the real msgfolderroot id.
     [[nodiscard]] Akonadi::Collection rootCollection() const;
 
-private Q_SLOTS:
+private:
     void onRootResolved(KJob *);
     void onRequestFinished(KJob *);
-
-private:
     void startDelta();
     [[nodiscard]] Akonadi::Collection collectionFromJson(const QJsonObject &folder) const;
 

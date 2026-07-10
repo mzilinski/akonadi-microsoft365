@@ -110,19 +110,19 @@ void GraphRequest::issue(const QUrl &url)
     QNetworkAccessManager *nam = mClient.networkAccessManager();
     QNetworkReply *reply = nullptr;
     switch (mMethod) {
-    case Get:
+    case Method::Get:
         reply = nam->get(req);
         break;
-    case Delete:
+    case Method::Delete:
         reply = nam->deleteResource(req);
         break;
-    case Post:
+    case Method::Post:
         reply = nam->post(req, mBody);
         break;
-    case Put:
+    case Method::Put:
         reply = nam->put(req, mBody);
         break;
-    case Patch:
+    case Method::Patch:
         reply = nam->sendCustomRequest(req, "PATCH", mBody);
         break;
     }

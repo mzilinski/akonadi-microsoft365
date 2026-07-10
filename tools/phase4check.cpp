@@ -47,7 +47,7 @@ static QJsonObject request(GraphClient &client, GraphRequest::Method method, con
     auto req = new GraphRequest(client);
     req->setMethod(method);
     req->setPath(path);
-    if (method == GraphRequest::Post || method == GraphRequest::Patch) {
+    if (method == GraphRequest::Method::Post || method == GraphRequest::Method::Patch) {
         req->setBody(body);
     }
     QJsonObject result;
@@ -85,7 +85,7 @@ int main(int argc, char **argv)
     int failures = 0;
 
     // --- calendar -----------------------------------------------------------
-    const auto cals = request(client, GraphRequest::Get, QStringLiteral("/me/calendars?$select=id,name"));
+    const auto cals = request(client, GraphRequest::Method::Get, QStringLiteral("/me/calendars?$select=id,name"));
     const QString calId = cals.value(QLatin1String("value")).toArray().first().toObject().value(QLatin1String("id")).toString();
     if (calId.isEmpty()) {
         std::printf("FAIL  no calendar found\n");
@@ -98,13 +98,13 @@ int main(int argc, char **argv)
                        {QStringLiteral("start"), evStart},
                        {QStringLiteral("end"), evEnd},
                        {QStringLiteral("location"), evLoc}};
-    const auto createdEv = request(client, GraphRequest::Post, QStringLiteral("/me/calendars/%1/events").arg(calId), evBody);
+    const auto createdEv = request(client, GraphRequest::Method::Post, QStringLiteral("/me/calendars/%1/events").arg(calId), evBody);
     const QString evId = createdEv.value(QLatin1String("id")).toString();
 
     Collection calCol;
     calCol.setRemoteId(calId);
     calCol.setContentMimeTypes({GraphEventHandler::mimeType()});
-    auto evJob = new GraphFetchPimItemsJob(client, calCol, GraphFetchPimItemsJob::Events, QString());
+    auto evJob = new GraphFetchPimItemsJob(client, calCol, GraphFetchPimItemsJob::Type::Events, QString());
     if (runJob(evJob)) {
         bool found = false;
         for (const Item &it : evJob->changedItems()) {
@@ -133,7 +133,7 @@ int main(int argc, char **argv)
         ++failures;
     }
     if (!evId.isEmpty()) {
-        request(client, GraphRequest::Delete, QStringLiteral("/me/events/%1").arg(evId));
+        request(client, GraphRequest::Method::Delete, QStringLiteral("/me/events/%1").arg(evId));
     }
 
     // --- contacts -----------------------------------------------------------
@@ -144,13 +144,13 @@ int main(int argc, char **argv)
                        {QStringLiteral("mobilePhone"), QStringLiteral("+49 170 111")},
                        {QStringLiteral("companyName"), QStringLiteral("ACME")},
                        {QStringLiteral("jobTitle"), QStringLiteral("Chefin")}};
-    const auto createdCt = request(client, GraphRequest::Post, QStringLiteral("/me/contacts"), ctBody);
+    const auto createdCt = request(client, GraphRequest::Method::Post, QStringLiteral("/me/contacts"), ctBody);
     const QString ctId = createdCt.value(QLatin1String("id")).toString();
 
     Collection ctCol;
     ctCol.setRemoteId(QStringLiteral("contacts-default"));
     ctCol.setContentMimeTypes({GraphContactHandler::mimeType()});
-    auto ctJob = new GraphFetchPimItemsJob(client, ctCol, GraphFetchPimItemsJob::Contacts, QString());
+    auto ctJob = new GraphFetchPimItemsJob(client, ctCol, GraphFetchPimItemsJob::Type::Contacts, QString());
     if (runJob(ctJob)) {
         bool found = false;
         for (const Item &it : ctJob->changedItems()) {
@@ -180,7 +180,7 @@ int main(int argc, char **argv)
         ++failures;
     }
     if (!ctId.isEmpty()) {
-        request(client, GraphRequest::Delete, QStringLiteral("/me/contacts/%1").arg(ctId));
+        request(client, GraphRequest::Method::Delete, QStringLiteral("/me/contacts/%1").arg(ctId));
     }
 
     // --- WRITE round-trip: event via toJson() -------------------------------
@@ -190,10 +190,10 @@ int main(int argc, char **argv)
         ev->setDtStart(QDateTime(QDate(2026, 8, 1), QTime(14, 0), QTimeZone::utc()));
         ev->setDtEnd(QDateTime(QDate(2026, 8, 1), QTime(15, 0), QTimeZone::utc()));
         ev->setLocation(QStringLiteral("Büro"));
-        const auto created = request(client, GraphRequest::Post, QStringLiteral("/me/calendars/%1/events").arg(calId), GraphEventHandler::toJson(ev));
+        const auto created = request(client, GraphRequest::Method::Post, QStringLiteral("/me/calendars/%1/events").arg(calId), GraphEventHandler::toJson(ev));
         const QString id = created.value(QLatin1String("id")).toString();
         // Read it back through the handler.
-        const auto readBack = request(client, GraphRequest::Get, QStringLiteral("/me/events/%1").arg(id));
+        const auto readBack = request(client, GraphRequest::Method::Get, QStringLiteral("/me/events/%1").arg(id));
         auto parsed = GraphEventHandler::toEvent(readBack);
         const bool ok = !id.isEmpty() && parsed && parsed->summary() == QLatin1String("phase4 write event") && parsed->location() == QStringLiteral("Büro")
             && parsed->dtStart().toUTC().time() == QTime(14, 0);
@@ -206,7 +206,7 @@ int main(int argc, char **argv)
             ++failures;
         }
         if (!id.isEmpty()) {
-            request(client, GraphRequest::Delete, QStringLiteral("/me/events/%1").arg(id));
+            request(client, GraphRequest::Method::Delete, QStringLiteral("/me/events/%1").arg(id));
         }
     }
 
@@ -219,9 +219,9 @@ int main(int argc, char **argv)
         KContacts::Email mail(QStringLiteral("hans@example.com"));
         mail.setPreferred(true);
         a.addEmail(mail);
-        const auto created = request(client, GraphRequest::Post, QStringLiteral("/me/contacts"), GraphContactHandler::toJson(a));
+        const auto created = request(client, GraphRequest::Method::Post, QStringLiteral("/me/contacts"), GraphContactHandler::toJson(a));
         const QString id = created.value(QLatin1String("id")).toString();
-        const auto readBack = request(client, GraphRequest::Get, QStringLiteral("/me/contacts/%1").arg(id));
+        const auto readBack = request(client, GraphRequest::Method::Get, QStringLiteral("/me/contacts/%1").arg(id));
         const auto parsed = GraphContactHandler::toAddressee(readBack);
         const bool ok = !id.isEmpty() && parsed.givenName() == QLatin1String("Hans") && parsed.familyName() == QLatin1String("Schreiber")
             && parsed.organization() == QLatin1String("WriteCo") && parsed.preferredEmail() == QLatin1String("hans@example.com");
@@ -235,7 +235,7 @@ int main(int argc, char **argv)
             ++failures;
         }
         if (!id.isEmpty()) {
-            request(client, GraphRequest::Delete, QStringLiteral("/me/contacts/%1").arg(id));
+            request(client, GraphRequest::Method::Delete, QStringLiteral("/me/contacts/%1").arg(id));
         }
     }
 
@@ -245,12 +245,12 @@ int main(int argc, char **argv)
         cal.setRemoteId(calId);
         cal.setContentMimeTypes({GraphEventHandler::mimeType()});
 
-        auto init = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, QString());
+        auto init = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Type::Events, QString());
         runJob(init);
         const long long initialCount = init->changedItems().size(); // capture before KJob auto-deletes
         const QString dl1 = init->deltaLink();
 
-        auto empty = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl1);
+        auto empty = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Type::Events, dl1);
         runJob(empty);
         const bool emptyOk = empty->changedItems().isEmpty() && empty->removedItems().isEmpty() && !empty->deltaLink().isEmpty();
         const QString dl2 = empty->deltaLink();
@@ -260,9 +260,9 @@ int main(int argc, char **argv)
         QJsonObject e{{QStringLiteral("dateTime"), QStringLiteral("2026-10-01T09:00:00")}, {QStringLiteral("timeZone"), QStringLiteral("UTC")}};
         QJsonObject body{{QStringLiteral("subject"), QStringLiteral("delta probe")}, {QStringLiteral("start"), s}, {QStringLiteral("end"), e}};
         const QString newId =
-            request(client, GraphRequest::Post, QStringLiteral("/me/calendars/%1/events").arg(calId), body).value(QLatin1String("id")).toString();
+            request(client, GraphRequest::Method::Post, QStringLiteral("/me/calendars/%1/events").arg(calId), body).value(QLatin1String("id")).toString();
 
-        auto added = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl2);
+        auto added = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Type::Events, dl2);
         runJob(added);
         bool addOk = false;
         for (const Item &it : added->changedItems()) {
@@ -273,8 +273,8 @@ int main(int argc, char **argv)
         const QString dl3 = added->deltaLink();
 
         // delete -> delta should report it as removed
-        request(client, GraphRequest::Delete, QStringLiteral("/me/events/%1").arg(newId));
-        auto removed = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Events, dl3);
+        request(client, GraphRequest::Method::Delete, QStringLiteral("/me/events/%1").arg(newId));
+        auto removed = new GraphFetchPimItemsJob(client, cal, GraphFetchPimItemsJob::Type::Events, dl3);
         runJob(removed);
         bool delOk = false;
         for (const Item &it : removed->removedItems()) {

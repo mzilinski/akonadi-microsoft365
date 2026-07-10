@@ -35,7 +35,8 @@ void GraphFetchPimItemsJob::start()
         startDelta(mDeltaLink, true); // resume from stored deltaLink
         return;
     }
-    if (mType == Events) {
+    switch (mType) {
+    case Type::Events:
         // The events delta returns only a minimal default field set; $select pulls the
         // fields we map. The returned deltaLink preserves this selection.
         startDelta(QStringLiteral("/me/calendars/%1/events/delta"
@@ -43,10 +44,13 @@ void GraphFetchPimItemsJob::start()
                                   "organizer,attendees,categories,showAs,sensitivity,recurrence")
                        .arg(mCollection.remoteId()),
                    false);
-    } else if (mType == Todos) {
+        break;
+    case Type::Todos:
         startDelta(QStringLiteral("/me/todo/lists/%1/tasks/delta").arg(mCollection.remoteId()), false);
-    } else {
+        break;
+    case Type::Contacts:
         resolveContactsFolderThenStart();
+        break;
     }
 }
 
@@ -124,7 +128,8 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             mRemoved.append(item);
             continue;
         }
-        if (mType == Events) {
+        switch (mType) {
+        case Type::Events: {
             auto event = GraphEventHandler::toEvent(obj);
             if (!event) {
                 continue;
@@ -134,7 +139,9 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             item.setParentCollection(mCollection);
             item.setPayload<KCalendarCore::Incidence::Ptr>(event);
             mChanged.append(item);
-        } else if (mType == Todos) {
+            break;
+        }
+        case Type::Todos: {
             auto todo = GraphTodoHandler::toTodo(obj);
             if (!todo) {
                 continue;
@@ -144,15 +151,19 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             item.setParentCollection(mCollection);
             item.setPayload<KCalendarCore::Incidence::Ptr>(todo);
             mChanged.append(item);
-        } else {
+            break;
+        }
+        case Type::Contacts: {
             Item item(GraphContactHandler::mimeType());
             item.setRemoteId(id);
             item.setParentCollection(mCollection);
             item.setPayload<KContacts::Addressee>(GraphContactHandler::toAddressee(obj));
             mChanged.append(item);
+            break;
+        }
         }
     }
-    if (mType == Contacts && !mChanged.isEmpty()) {
+    if (mType == Type::Contacts && !mChanged.isEmpty()) {
         fetchPhotos(); // photos are a separate endpoint, not part of the contact JSON
         return;
     }
@@ -179,7 +190,7 @@ void GraphFetchPimItemsJob::fetchPhotos()
     body.insert(QStringLiteral("requests"), requests);
 
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Post);
+    req->setMethod(GraphRequest::Method::Post);
     req->setPath(QStringLiteral("/$batch"));
     req->setBody(body);
     connect(req, &KJob::result, this, [this, req, last](KJob *job) {

@@ -108,6 +108,7 @@ KContacts::Addressee toAddressee(const QJsonObject &json)
 
     QStringList categories;
     const QJsonArray cats = json.value(QLatin1String("categories")).toArray();
+    categories.reserve(cats.count());
     for (const auto &c : cats) {
         const QString category = c.toString();
         if (!category.isEmpty()) {

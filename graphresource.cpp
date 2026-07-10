@@ -294,7 +294,7 @@ void GraphResource::retrieveCollections()
     if (mSpecialFolderIndex.isEmpty()) {
         QList<GraphBatchJob::Call> calls;
         for (const auto &sf : kSpecialFolders) {
-            calls.append({GraphRequest::Get, QStringLiteral("/me/mailFolders/%1?$select=id").arg(QLatin1String(sf.wellKnownName)), {}});
+            calls.append({GraphRequest::Method::Get, QStringLiteral("/me/mailFolders/%1?$select=id").arg(QLatin1String(sf.wellKnownName)), {}});
         }
         auto job = new GraphBatchJob(mClient, calls, this);
         job->setIgnoreNotFound(true); // a mailbox may lack e.g. a real Outbox folder
@@ -549,9 +549,9 @@ void GraphResource::retrieveItems(const Akonadi::Collection &collection)
     if (mimeTypes.contains(GraphEventHandler::mimeType()) || mimeTypes.contains(GraphContactHandler::mimeType())
         || mimeTypes.contains(GraphTodoHandler::mimeType())) {
         // Calendar/contacts/tasks: delta change tracking, payloads delivered whole.
-        const auto type = mimeTypes.contains(GraphEventHandler::mimeType()) ? GraphFetchPimItemsJob::Events
-            : mimeTypes.contains(GraphTodoHandler::mimeType())              ? GraphFetchPimItemsJob::Todos
-                                                                            : GraphFetchPimItemsJob::Contacts;
+        const auto type = mimeTypes.contains(GraphEventHandler::mimeType()) ? GraphFetchPimItemsJob::Type::Events
+            : mimeTypes.contains(GraphTodoHandler::mimeType())              ? GraphFetchPimItemsJob::Type::Todos
+                                                                            : GraphFetchPimItemsJob::Type::Contacts;
         auto job = new GraphFetchPimItemsJob(mClient, collection, type, collectionDeltaLink(collection), this);
         connect(job, &KJob::result, this, &GraphResource::fetchPimItemsJobFinished);
         job->start();
@@ -769,7 +769,7 @@ void GraphResource::itemsFlagsChanged(const Item::List &items,
     QList<GraphBatchJob::Call> calls;
     calls.reserve(items.size());
     for (const Item &item : items) {
-        calls.append({GraphRequest::Patch, QStringLiteral("/me/messages/%1").arg(item.remoteId()), GraphMailHandler::flagPatchBody(item)});
+        calls.append({GraphRequest::Method::Patch, QStringLiteral("/me/messages/%1").arg(item.remoteId()), GraphMailHandler::flagPatchBody(item)});
     }
     auto job = new GraphBatchJob(mClient, calls, this);
     connect(job, &KJob::result, this, [this, items](KJob *job) {
@@ -836,7 +836,7 @@ void GraphResource::replaceDraft(const Akonadi::Item &item)
             return;
         }
         auto del = new GraphRequest(mClient, this);
-        del->setMethod(GraphRequest::Delete);
+        del->setMethod(GraphRequest::Method::Delete);
         del->setPath(QStringLiteral("/me/messages/%1").arg(item.remoteId()));
         connect(del, &KJob::result, this, [this, item, newId, del](KJob *dj) {
             if (dj->error() && del->httpStatus() != 404) {
@@ -862,7 +862,7 @@ void GraphResource::createMimeMessage(const QByteArray &rawMime,
     // message therefore always appears as a draft in the Drafts folder first and has to
     // be moved when the target is some other folder (a move assigns a new id).
     auto create = new GraphRequest(mClient, this);
-    create->setMethod(GraphRequest::Post);
+    create->setMethod(GraphRequest::Method::Post);
     create->setPath(QStringLiteral("/me/messages"));
     create->setRawBody(rawMime, contentType);
     connect(create, &KJob::result, this, [this, targetFolderRid, done, create](KJob *job) {
@@ -877,7 +877,7 @@ void GraphResource::createMimeMessage(const QByteArray &rawMime,
             return;
         }
         auto move = new GraphRequest(mClient, this);
-        move->setMethod(GraphRequest::Post);
+        move->setMethod(GraphRequest::Method::Post);
         move->setPath(QStringLiteral("/me/messages/%1/move").arg(id));
         move->setBody(QJsonObject{{QStringLiteral("destinationId"), targetFolderRid}});
         connect(move, &KJob::result, this, [move, done](KJob *mj) {
@@ -895,7 +895,7 @@ void GraphResource::createMimeMessage(const QByteArray &rawMime,
 void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body)
 {
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Patch);
+    req->setMethod(GraphRequest::Method::Patch);
     req->setPath(path);
     req->setBody(body);
     connect(req, &KJob::result, this, [this, item](KJob *job) {
@@ -983,7 +983,7 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
 void GraphResource::postPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body)
 {
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Post);
+    req->setMethod(GraphRequest::Method::Post);
     req->setPath(path);
     req->setBody(body);
     connect(req, &KJob::result, this, [this, item, req](KJob *job) {
@@ -1031,7 +1031,7 @@ void GraphResource::movePimItem(const Item::List &items,
     }
 
     auto create = new GraphRequest(mClient, this);
-    create->setMethod(GraphRequest::Post);
+    create->setMethod(GraphRequest::Method::Post);
     create->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks").arg(destination.remoteId())
                            : QStringLiteral("/me/calendars/%1/events").arg(destination.remoteId()));
     create->setBody(body);
@@ -1042,7 +1042,7 @@ void GraphResource::movePimItem(const Item::List &items,
         }
         const QString newId = create->responseObject().value(QLatin1String("id")).toString();
         auto del = new GraphRequest(mClient, this);
-        del->setMethod(GraphRequest::Delete);
+        del->setMethod(GraphRequest::Method::Delete);
         del->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(source.remoteId(), item.remoteId())
                             : QStringLiteral("/me/events/%1").arg(item.remoteId()));
         connect(del, &KJob::result, this, [this, del, items, index, moved, source, destination, item, newId](KJob *dj) {
@@ -1084,7 +1084,7 @@ void GraphResource::putContactPhotoThenCommit(const Akonadi::Item &item)
         return;
     }
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Put);
+    req->setMethod(GraphRequest::Method::Put);
     req->setPath(QStringLiteral("/me/contacts/%1/photo/$value").arg(item.remoteId()));
     req->setRawBody(data, contentType);
     connect(req, &KJob::result, this, [this, item](KJob *job) {
@@ -1147,7 +1147,7 @@ void GraphResource::itemsMoved(const Item::List &items, const Collection &source
     QJsonObject body;
     body.insert(QStringLiteral("destinationId"), destination.remoteId());
     for (const Item &item : items) {
-        calls.append({GraphRequest::Post, QStringLiteral("/me/messages/%1/move").arg(item.remoteId()), body});
+        calls.append({GraphRequest::Method::Post, QStringLiteral("/me/messages/%1/move").arg(item.remoteId()), body});
     }
     auto job = new GraphBatchJob(mClient, calls, this);
     connect(job, &KJob::result, this, [this, items, job](KJob *kjob) {
@@ -1185,7 +1185,7 @@ void GraphResource::itemsRemoved(const Item::List &items)
             // Tasks are addressed through their list; the parent collection carries it.
             const QString path = pimBase.isEmpty() ? QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(item.parentCollection().remoteId(), item.remoteId())
                                                    : pimBase.arg(item.remoteId());
-            calls.append({GraphRequest::Delete, path, {}});
+            calls.append({GraphRequest::Method::Delete, path, {}});
         }
         auto job = new GraphBatchJob(mClient, calls, this);
         job->setIgnoreNotFound(true);
@@ -1204,7 +1204,7 @@ void GraphResource::itemsRemoved(const Item::List &items)
     calls.reserve(items.size());
     for (const Item &item : items) {
         // DELETE moves to Deleted Items' recoverable items; matches user expectation.
-        calls.append({GraphRequest::Delete, QStringLiteral("/me/messages/%1").arg(item.remoteId()), {}});
+        calls.append({GraphRequest::Method::Delete, QStringLiteral("/me/messages/%1").arg(item.remoteId()), {}});
     }
     auto job = new GraphBatchJob(mClient, calls, this);
     job->setIgnoreNotFound(true);
@@ -1245,7 +1245,7 @@ void GraphResource::collectionAdded(const Collection &collection, const Collecti
     }
 
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Post);
+    req->setMethod(GraphRequest::Method::Post);
     req->setPath(path);
     req->setBody(body);
     connect(req, &KJob::result, this, [this, collection, req](KJob *job) {
@@ -1286,7 +1286,7 @@ void GraphResource::collectionChanged(const Collection &collection, const QSet<Q
     QJsonObject body;
     body.insert(nameField, collection.name());
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Patch);
+    req->setMethod(GraphRequest::Method::Patch);
     req->setPath(path);
     req->setBody(body);
     connect(req, &KJob::result, this, [this, collection](KJob *job) {
@@ -1311,7 +1311,7 @@ void GraphResource::collectionMoved(const Collection &collection, [[maybe_unused
     QJsonObject body;
     body.insert(QStringLiteral("destinationId"), destination.remoteId());
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Post);
+    req->setMethod(GraphRequest::Method::Post);
     req->setPath(QStringLiteral("/me/mailFolders/%1/move").arg(collection.remoteId()));
     req->setBody(body);
     connect(req, &KJob::result, this, [this, collection, req](KJob *job) {
@@ -1347,7 +1347,7 @@ void GraphResource::collectionRemoved(const Collection &collection)
         break;
     }
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Delete);
+    req->setMethod(GraphRequest::Method::Delete);
     req->setPath(path);
     connect(req, &KJob::result, this, [this, req](KJob *job) {
         if (job->error() && req->httpStatus() != 404) {
@@ -1372,7 +1372,7 @@ void GraphResource::sendMessage(const QString &id, const QByteArray &content)
 {
     // 1. Create a draft from the raw MIME (base64, Content-Type: text/plain)...
     auto createReq = new GraphRequest(mClient, this);
-    createReq->setMethod(GraphRequest::Post);
+    createReq->setMethod(GraphRequest::Method::Post);
     createReq->setPath(QStringLiteral("/me/messages"));
     createReq->setRawBody(content.toBase64(), QByteArrayLiteral("text/plain"));
     connect(createReq, &KJob::result, this, [this, id, createReq](KJob *job) {
@@ -1383,7 +1383,7 @@ void GraphResource::sendMessage(const QString &id, const QByteArray &content)
         const QString draftId = createReq->responseObject().value(QLatin1String("id")).toString();
         // 2. ...then send it.
         auto sendReq = new GraphRequest(mClient, this);
-        sendReq->setMethod(GraphRequest::Post);
+        sendReq->setMethod(GraphRequest::Method::Post);
         sendReq->setPath(QStringLiteral("/me/messages/%1/send").arg(draftId));
         connect(sendReq, &KJob::result, this, [this, id](KJob *job) {
             Q_EMIT messageSent(id, job->error() ? job->errorText() : QString());

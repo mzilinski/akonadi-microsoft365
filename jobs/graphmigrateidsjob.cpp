@@ -103,7 +103,7 @@ void GraphMigrateIdsJob::translateNextChunk()
         inputIds.append(item.remoteId());
     }
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Post);
+    req->setMethod(GraphRequest::Method::Post);
     req->setPath(QStringLiteral("/me/translateExchangeIds"));
     req->setBody({{QStringLiteral("inputIds"), inputIds},
                   {QStringLiteral("sourceIdType"), QStringLiteral("restId")},

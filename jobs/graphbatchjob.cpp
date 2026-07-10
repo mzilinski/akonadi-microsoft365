@@ -32,7 +32,7 @@ void GraphBatchJob::next()
     auto req = new GraphRequest(mClient, this);
     req->setMethod(call.method);
     req->setPath(call.path);
-    if (call.method == GraphRequest::Post || call.method == GraphRequest::Patch) {
+    if (call.method == GraphRequest::Method::Post || call.method == GraphRequest::Method::Patch) {
         req->setBody(call.body);
     }
     connect(req, &KJob::result, this, [this, req](KJob *job) {

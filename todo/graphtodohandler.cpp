@@ -110,6 +110,7 @@ KCalendarCore::Todo::Ptr toTodo(const QJsonObject &json)
 
     QStringList categories;
     const QJsonArray cats = json.value(QLatin1String("categories")).toArray();
+    categories.reserve(cats.count());
     for (const auto &c : cats) {
         categories << c.toString();
     }

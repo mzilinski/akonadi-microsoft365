@@ -23,11 +23,12 @@ class GraphFetchPimItemsJob : public KJob
 {
     Q_OBJECT
 public:
-    enum Type {
+    enum class Type : uint8_t {
         Events,
         Contacts,
         Todos
     };
+    Q_ENUM(Type)
 
     GraphFetchPimItemsJob(GraphClient &client, const Akonadi::Collection &collection, Type type, const QString &deltaLink, QObject *parent = nullptr);
 
@@ -38,10 +39,8 @@ public:
     [[nodiscard]] Akonadi::Item::List removedItems() const;
     [[nodiscard]] QString deltaLink() const;
 
-private Q_SLOTS:
-    void onDeltaFinished(KJob *);
-
 private:
+    void onDeltaFinished(KJob *);
     void startDelta(const QString &absoluteUrlOrPath, bool isAbsolute);
     void resolveContactsFolderThenStart();
     void fetchPhotos();

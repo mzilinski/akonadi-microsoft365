@@ -52,7 +52,7 @@ void GraphFetchItemPayloadJob::fetchBatch()
     body.insert(QStringLiteral("requests"), requests);
 
     auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Post);
+    req->setMethod(GraphRequest::Method::Post);
     req->setPath(QStringLiteral("/$batch"));
     req->setBody(body);
     connect(req, &KJob::result, this, [this, req, last](KJob *job) {

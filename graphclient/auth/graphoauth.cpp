@@ -92,7 +92,7 @@ void GraphOAuth::setUpFlow()
 void GraphOAuth::authenticate()
 {
     // Test hook: bypass the whole flow with a caller-supplied bearer token
-    // (used by tools/graphsmoketest and handy for headless debugging).
+    // (handy for tests and headless debugging).
     if (qEnvironmentVariableIsSet("GRAPH_ACCESS_TOKEN")) {
         mEnvToken = qEnvironmentVariable("GRAPH_ACCESS_TOKEN");
         QMetaObject::invokeMethod(this, &GraphOAuth::ready, Qt::QueuedConnection);
