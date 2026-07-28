@@ -4,10 +4,12 @@
 include(ECMMarkAsTest)
 
 macro(add_graph_test _name)
-    add_executable(${_name} ${ARGN})
+    # graph_common_SRCS carries the generated logging category (graph_debug.h/.cpp)
+    # from the parent directory, which the handler sources include.
+    add_executable(${_name} ${ARGN} ${graph_common_SRCS})
     add_test(NAME graph-${_name} COMMAND ${_name})
     ecm_mark_as_test(${_name})
-    target_include_directories(${_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    target_include_directories(${_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_CURRENT_BINARY_DIR}/..)
     target_link_libraries(
         ${_name}
         Qt::Test
