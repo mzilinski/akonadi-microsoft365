@@ -5,6 +5,8 @@
 
 #include "grapheventhandler.h"
 
+#include "graph_debug.h"
+
 #include <KCalendarCore/Attendee>
 #include <KCalendarCore/Person>
 #include <KCalendarCore/Recurrence>
@@ -97,7 +99,8 @@ void applyRecurrence(const QJsonObject &recurrence, const Incidence::Ptr &incide
     } else if (type == QLatin1String("absoluteYearly") || type == QLatin1String("relativeYearly")) {
         r->setYearly(interval);
     } else {
-        return; // unsupported pattern -> treat as single occurrence
+        qCWarning(GRAPH_LOG) << "unsupported recurrence pattern type" << type;
+        return; // treat as single occurrence
     }
 
     const QString rangeType = range.value(QLatin1String("type")).toString();
@@ -144,7 +147,7 @@ QJsonObject recurrenceToJson(const Incidence::Ptr &incidence)
     }
     case Recurrence::rMonthlyDay:
         pattern.insert(QStringLiteral("type"), QStringLiteral("absoluteMonthly"));
-        pattern.insert(QStringLiteral("dayOfMonth"), r->monthDays().isEmpty() ? startDate.day() : r->monthDays().first());
+        pattern.insert(QStringLiteral("dayOfMonth"), r->monthDays().isEmpty() ? startDate.day() : r->monthDays().constFirst());
         break;
     case Recurrence::rYearlyMonth:
         pattern.insert(QStringLiteral("type"), QStringLiteral("absoluteYearly"));

@@ -39,7 +39,7 @@ private:
     GraphClient &mClient;
     Akonadi::Collection mRoot;
     QString mDeltaLink;
-    bool mIncremental;
+    bool mIncremental = false;
     Akonadi::Collection::List mAll;
     Akonadi::Collection::List mChanged;
     Akonadi::Collection::List mRemoved;

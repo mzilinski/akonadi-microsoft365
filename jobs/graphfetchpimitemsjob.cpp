@@ -233,10 +233,12 @@ Collection GraphFetchPimItemsJob::collection() const
 {
     return mCollection;
 }
+
 Item::List GraphFetchPimItemsJob::changedItems() const
 {
     return mChanged;
 }
+
 Item::List GraphFetchPimItemsJob::removedItems() const
 {
     return mRemoved;

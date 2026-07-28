@@ -101,7 +101,7 @@ private Q_SLOTS:
         const Todo::Ptr todo = GraphTodoHandler::toTodo(json);
         QVERIFY(todo);
         QCOMPARE(todo->alarms().size(), 1);
-        QCOMPARE(todo->alarms().first()->time(), QDateTime(QDate(2026, 7, 9), QTime(9, 0), QTimeZone::utc()));
+        QCOMPARE(todo->alarms().constFirst()->time(), QDateTime(QDate(2026, 7, 9), QTime(9, 0), QTimeZone::utc()));
     }
 
     void shouldMapDailyRecurrence()

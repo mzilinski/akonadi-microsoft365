@@ -650,9 +650,9 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unus
     // Calendar/contact payloads are delivered whole during collection sync; if Akonadi
     // still asks (cache miss), the items already carry their payload, so just return them.
     if (!items.isEmpty()) {
-        const QString mime = items.first().mimeType();
+        const QString mime = items.constFirst().mimeType();
         if (mime == GraphEventHandler::mimeType() || mime == GraphContactHandler::mimeType() || mime == GraphTodoHandler::mimeType()) {
-            if (items.first().hasPayload()) {
+            if (items.constFirst().hasPayload()) {
                 itemsRetrieved(items);
                 return true;
             }
@@ -1128,7 +1128,7 @@ void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &
 
 void GraphResource::itemsMoved(const Item::List &items, const Collection &source, const Collection &destination)
 {
-    const QString mime = items.isEmpty() ? QString() : items.first().mimeType();
+    const QString mime = items.isEmpty() ? QString() : items.constFirst().mimeType();
     if (mime == GraphEventHandler::mimeType() || mime == GraphTodoHandler::mimeType()) {
         // Graph has no move API for events or tasks — recreate in the destination and
         // delete the original (Outlook on the web does the same). Attendees are not
@@ -1172,7 +1172,7 @@ void GraphResource::itemsMoved(const Item::List &items, const Collection &source
 void GraphResource::itemsRemoved(const Item::List &items)
 {
     // Calendar/contact/task deletes hit different endpoints (and never carry mail flags).
-    const QString mime = items.isEmpty() ? QString() : items.first().mimeType();
+    const QString mime = items.isEmpty() ? QString() : items.constFirst().mimeType();
     QString pimBase;
     if (mime == GraphEventHandler::mimeType()) {
         pimBase = QStringLiteral("/me/events/%1");

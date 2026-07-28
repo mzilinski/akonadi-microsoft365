@@ -52,7 +52,7 @@ bool GraphMtaResource::connectToMasterResource()
             return false;
         }
     } else if (candidates.size() == 1) {
-        service = candidates.first();
+        service = candidates.constFirst();
         // Remember the choice so a second account added later cannot silently
         // re-route this transport to the wrong mailbox.
         group.writeEntry("MasterResource", service.mid(serviceBase.size()));

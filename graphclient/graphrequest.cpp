@@ -27,26 +27,32 @@ void GraphRequest::setMethod(Method m)
 {
     mMethod = m;
 }
+
 void GraphRequest::setPath(const QString &path)
 {
     mPath = path;
 }
+
 void GraphRequest::setAbsoluteUrl(const QUrl &url)
 {
     mAbsoluteUrl = url;
 }
+
 void GraphRequest::setFollowPaging(bool follow)
 {
     mFollowPaging = follow;
 }
+
 void GraphRequest::setExpectRawPayload(bool raw)
 {
     mExpectRaw = raw;
 }
+
 void GraphRequest::setUseImmutableIds(bool use)
 {
     mUseImmutableIds = use;
 }
+
 void GraphRequest::addHeader(const QByteArray &name, const QByteArray &value)
 {
     mHeaders.append({name, value});
@@ -204,22 +210,27 @@ QJsonObject GraphRequest::responseObject() const
 {
     return mResponseObject;
 }
+
 QJsonArray GraphRequest::aggregatedValue() const
 {
     return mAggregated;
 }
+
 QByteArray GraphRequest::rawPayload() const
 {
     return mRawPayload;
 }
+
 QString GraphRequest::deltaLink() const
 {
     return mDeltaLink;
 }
+
 int GraphRequest::httpStatus() const
 {
     return mHttpStatus;
 }
+
 QString GraphRequest::graphErrorCode() const
 {
     return mGraphErrorCode;

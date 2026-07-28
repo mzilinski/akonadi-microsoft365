@@ -47,7 +47,7 @@ private:
 
     GraphClient &mClient;
     Akonadi::Collection mCollection;
-    Type mType;
+    Type mType = Type::Events;
     QString mDeltaLink;
     Akonadi::Item::List mChanged;
     Akonadi::Item::List mRemoved;

@@ -127,10 +127,12 @@ Collection GraphFetchItemsJob::collection() const
 {
     return mCollection;
 }
+
 Item::List GraphFetchItemsJob::changedItems() const
 {
     return mChanged;
 }
+
 Item::List GraphFetchItemsJob::removedItems() const
 {
     return mRemoved;
