@@ -229,6 +229,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
         contact/graphcontacthandler.cpp
         todo/graphtodohandler.cpp
         jobs/graphfetchpimitemsjob.cpp
+        ${graph_common_SRCS}
     )
     target_link_libraries(
         phase4check
@@ -244,6 +245,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
         tools/writetest.cpp
         calendar/grapheventhandler.cpp
         contact/graphcontacthandler.cpp
+        ${graph_common_SRCS}
     )
     target_link_libraries(
         writetest
