@@ -48,9 +48,6 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     find_package(Qt6Keychain CONFIG REQUIRED)
 endif()
 
-# KMail requires separate send/receive resources.
-set(HAVE_SEPARATE_MTA_RESOURCE TRUE)
-
 add_subdirectory(graphclient)
 
 add_definitions(-DTRANSLATION_DOMAIN=\"akonadi_graph_resource\")
@@ -127,33 +124,32 @@ target_link_libraries(
 )
 
 # ---- transport (send) resource ---------------------------------------------
-if(HAVE_SEPARATE_MTA_RESOURCE)
-    set(graphmtaresource_SRCS
-        graphmtaresource.cpp
-        graphmtaresource.h
-        ${graph_common_SRCS}
-    )
-    qt_add_dbus_interface(graphmtaresource_SRCS
-        ${CMAKE_CURRENT_BINARY_DIR}/org.kde.Akonadi.Graph.Resource.xml
-        graphresourceinterface
-    )
-    add_executable(akonadi_graphmta_resource ${graphmtaresource_SRCS})
-    target_include_directories(
-        akonadi_graphmta_resource
-        PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
-            ${CMAKE_CURRENT_BINARY_DIR}
-    )
-    target_link_libraries(
-        akonadi_graphmta_resource
-        KPim6::AkonadiAgentWidgetBase
-        KPim6::AkonadiCore
-        KF6::Mime
-        KF6::I18n
-        Qt::DBus
-        graphclient
-    )
-endif()
+# KMail requires separate send/receive resources.
+set(graphmtaresource_SRCS
+    graphmtaresource.cpp
+    graphmtaresource.h
+    ${graph_common_SRCS}
+)
+qt_add_dbus_interface(graphmtaresource_SRCS
+    ${CMAKE_CURRENT_BINARY_DIR}/org.kde.Akonadi.Graph.Resource.xml
+    graphresourceinterface
+)
+add_executable(akonadi_graphmta_resource ${graphmtaresource_SRCS})
+target_include_directories(
+    akonadi_graphmta_resource
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}
+)
+target_link_libraries(
+    akonadi_graphmta_resource
+    KPim6::AkonadiAgentWidgetBase
+    KPim6::AkonadiCore
+    KF6::Mime
+    KF6::I18n
+    Qt::DBus
+    graphclient
+)
 
 # ---- config plugin (loaded by the client's agent configuration dialog) ------
 kcoreaddons_add_plugin(graphconfig
@@ -267,15 +263,13 @@ install(
         ${KDE_INSTALL_TARGETS_DEFAULT_ARGS}
 )
 
-if(HAVE_SEPARATE_MTA_RESOURCE)
-    install(
-        FILES
-            ${CMAKE_CURRENT_SOURCE_DIR}/graphmtaresource.desktop
-        DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents"
-    )
-    install(
-        TARGETS
-            akonadi_graphmta_resource
-            ${KDE_INSTALL_TARGETS_DEFAULT_ARGS}
-    )
-endif()
+install(
+    FILES
+        ${CMAKE_CURRENT_SOURCE_DIR}/graphmtaresource.desktop
+    DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents"
+)
+install(
+    TARGETS
+        akonadi_graphmta_resource
+        ${KDE_INSTALL_TARGETS_DEFAULT_ARGS}
+)
