@@ -17,7 +17,6 @@
 #include <Akonadi/Item>
 #include <KJob>
 
-#include <QHash>
 
 class GraphClient;
 

@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QTimer>
 
 static constexpr int MaxRetries = 5;
@@ -36,16 +37,6 @@ void GraphRequest::setPath(const QString &path)
 void GraphRequest::setAbsoluteUrl(const QUrl &url)
 {
     mAbsoluteUrl = url;
-}
-
-void GraphRequest::setFollowPaging(bool follow)
-{
-    mFollowPaging = follow;
-}
-
-void GraphRequest::setExpectRawPayload(bool raw)
-{
-    mExpectRaw = raw;
 }
 
 void GraphRequest::setUseImmutableIds(bool use)
@@ -169,13 +160,6 @@ void GraphRequest::onReplyFinished()
         return;
     }
 
-    // --- raw payload (/$value) -------------------------------------------------
-    if (mExpectRaw) {
-        mRawPayload = reply->readAll();
-        emitResult();
-        return;
-    }
-
     const QByteArray data = reply->readAll();
     const QJsonObject obj = QJsonDocument::fromJson(data).object();
 
@@ -185,7 +169,7 @@ void GraphRequest::onReplyFinished()
             mAggregated.append(v);
         }
         // Delta/paging links.
-        if (obj.contains(QLatin1String("@odata.nextLink")) && mFollowPaging) {
+        if (obj.contains(QLatin1String("@odata.nextLink"))) {
             issue(QUrl(obj.value(QLatin1String("@odata.nextLink")).toString()));
             return; // keep aggregating
         }
@@ -214,11 +198,6 @@ QJsonObject GraphRequest::responseObject() const
 QJsonArray GraphRequest::aggregatedValue() const
 {
     return mAggregated;
-}
-
-QByteArray GraphRequest::rawPayload() const
-{
-    return mRawPayload;
 }
 
 QString GraphRequest::deltaLink() const

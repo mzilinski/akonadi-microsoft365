@@ -10,7 +10,6 @@
 #include <KLocalizedString>
 
 #include <QDateTime>
-#include <QDebug>
 #include <QDesktopServices>
 #include <QHostAddress>
 #include <QOAuth2AuthorizationCodeFlow>

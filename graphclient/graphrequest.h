@@ -15,11 +15,9 @@
 #include <KJob>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QNetworkRequest>
 #include <QUrl>
 
 class GraphClient;
-class QNetworkReply;
 
 class GraphRequest : public KJob
 {
@@ -41,8 +39,6 @@ public:
     void setAbsoluteUrl(const QUrl &url); // e.g. a stored nextLink/deltaLink (overrides path)
     void setBody(const QJsonObject &body);
     void setRawBody(const QByteArray &body, const QByteArray &contentType);
-    void setFollowPaging(bool follow); // aggregate @odata.value across nextLinks
-    void setExpectRawPayload(bool raw); // for /$value (returns MIME bytes, not JSON)
     // Requests ask for immutable item ids by default (IdType="ImmutableId"). Opt out
     // for listings whose returned ids serve as *collection* remoteIds: unlike
     // mailFolders, /me/calendars ids do change under IdType, and the stored
@@ -55,7 +51,6 @@ public:
     // Results (available in result slot):
     [[nodiscard]] QJsonObject responseObject() const; // single-object responses
     [[nodiscard]] QJsonArray aggregatedValue() const; // paged list responses ("value" concatenated)
-    [[nodiscard]] QByteArray rawPayload() const; // when setExpectRawPayload(true)
     [[nodiscard]] QString deltaLink() const; // @odata.deltaLink from the final page (if any)
     [[nodiscard]] int httpStatus() const; // HTTP status of the (last) reply
     [[nodiscard]] QString graphErrorCode() const; // "error.code" from a Graph error body
@@ -72,13 +67,10 @@ private:
     QByteArray mBody;
     QByteArray mContentType;
     QList<QPair<QByteArray, QByteArray>> mHeaders;
-    bool mFollowPaging = true;
-    bool mExpectRaw = false;
     bool mUseImmutableIds = true;
 
     QJsonObject mResponseObject;
     QJsonArray mAggregated;
-    QByteArray mRawPayload;
     QString mDeltaLink;
     QString mGraphErrorCode;
     int mRetryCount = 0;

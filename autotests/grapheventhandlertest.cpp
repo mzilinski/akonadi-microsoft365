@@ -11,7 +11,6 @@
 #include <KCalendarCore/Recurrence>
 
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QTest>
 #include <QTimeZone>

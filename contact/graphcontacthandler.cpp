@@ -9,7 +9,6 @@
 #include <KContacts/Email>
 #include <KContacts/PhoneNumber>
 
-#include <QDate>
 #include <QDateTime>
 #include <QJsonArray>
 
