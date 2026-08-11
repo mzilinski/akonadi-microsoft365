@@ -17,7 +17,6 @@
 #include <Akonadi/Item>
 #include <KJob>
 
-
 class GraphClient;
 
 class GraphFetchItemPayloadJob : public KJob
