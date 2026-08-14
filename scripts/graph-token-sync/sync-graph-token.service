@@ -1,0 +1,6 @@
+[Unit]
+Description=Sync Microsoft Graph refresh token from GNOME keyring
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/sync-graph-token.sh

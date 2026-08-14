@@ -6,3 +6,5 @@ build-*/
 *.kate-swp
 .cache/
 compile_commands.json
+token.json
+.idea/

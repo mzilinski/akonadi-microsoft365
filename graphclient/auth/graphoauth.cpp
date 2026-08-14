@@ -91,7 +91,6 @@ void GraphOAuth::setUpFlow()
 void GraphOAuth::authenticate()
 {
     // Test hook: bypass the whole flow with a caller-supplied bearer token
-    // (handy for tests and headless debugging).
     if (qEnvironmentVariableIsSet("GRAPH_ACCESS_TOKEN")) {
         mEnvToken = qEnvironmentVariable("GRAPH_ACCESS_TOKEN");
         QMetaObject::invokeMethod(this, &GraphOAuth::ready, Qt::QueuedConnection);
@@ -99,6 +98,15 @@ void GraphOAuth::authenticate()
     }
 
     setUpFlow();
+
+    // Test hook: allow an externally-provisioned refresh token (e.g. synced from GNOME keyring) to bypass the interactive browser login.
+    const QString envRefreshToken = qEnvironmentVariable("GRAPH_REFRESH_TOKEN");
+    if (!envRefreshToken.isEmpty()) {
+        qCInfo(GRAPHCLIENT_LOG) << "Bypassing interactive login using injected GRAPH_REFRESH_TOKEN";
+        startSilentRefresh(envRefreshToken);
+        return;
+    }
+
 
     auto job = new QKeychain::ReadPasswordJob(kKeychainService, this);
     job->setKey(mWalletKey);
@@ -123,6 +131,13 @@ void GraphOAuth::startSilentRefresh(const QString &refreshToken)
 
 void GraphOAuth::startInteractive()
 {
+    // CUSTOM FIX: If we have an environmental token active, we are already authed.
+    // Abort the interactive browser push entirely.
+    if (qEnvironmentVariableIsSet("GRAPH_REFRESH_TOKEN")) {
+        qCInfo(GRAPHCLIENT_LOG) << "Token active. Skipping interactive browser grant loop.";
+        return;
+    }
+
     mInteractive = true;
 
     if (!mReplyHandler) {

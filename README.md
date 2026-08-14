@@ -1,3 +1,33 @@
+## my workarounds
+
+Any code changes in this repo, you must run:
+```bash
+cd build
+rm -rf *
+cmake .. -DCMAKE_INSTALL_PREFIX=/usr && make
+sudo make install
+```
+
+Any script changes, you must run: (assuming you are in the `build` dir still)
+```bash
+cp ../scripts/graph-token-sync/sync-graph-token.sh ~/.local/bin/sync-graph-token.sh
+cp ../scripts/graph-token-sync/.env ~/.local/bin/.env  # copy .env.example first if you haven't made one
+chmod 700 ~/.local/bin/sync-graph-token.sh
+chmod 600 ~/.local/bin/.env
+cp ../scripts/graph-token-sync/sync-graph-token.service ~/.config/systemd/user/
+cp ../scripts/graph-token-sync/sync-graph-token.timer ~/.config/systemd/user/
+
+systemctl --user daemon-reload
+systemctl --user enable --now sync-graph-token.timer
+systemctl --user start sync-graph-token.service
+```
+
+After ANY of that, you must run:
+```bash
+akonadictl restart
+```
+
+
 <!--
 SPDX-FileCopyrightText: 2026 Malte Zilinski <malte@zilinski.eu>
 SPDX-License-Identifier: LGPL-2.0-or-later
