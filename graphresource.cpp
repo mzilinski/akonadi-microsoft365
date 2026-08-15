@@ -158,6 +158,11 @@ void GraphResource::setUpAuth()
     mAuth.reset(new GraphOAuth(mSettings->tenantId(), mSettings->clientId(), identifier(), this));
     connect(mAuth.data(), &GraphOAuth::ready, this, &GraphResource::onAuthReady);
     connect(mAuth.data(), &GraphOAuth::failed, this, &GraphResource::onAuthFailed);
+    // Repoint the client before any request can run again: doSetOnline(true) re-enters
+    // here while a poll sync or throttling retry may still be in flight, and such a
+    // request would otherwise dereference the just-destroyed auth object in
+    // GraphRequest::issue(). With the fresh (token-less) auth it gets a 401 instead.
+    reconfigureClient();
     Q_EMIT status(Running, i18nc("@info:status", "Authenticating with Microsoft 365"));
     mAuth->authenticate();
 }
