@@ -134,6 +134,9 @@ QJsonObject toJson(const KContacts::Addressee &a)
     json.insert(QStringLiteral("companyName"), a.organization());
     json.insert(QStringLiteral("department"), a.department());
     json.insert(QStringLiteral("personalNotes"), a.note());
+    // birthday is read in toAddressee() but deliberately never written back:
+    // Exchange reacts to a birthday write by creating a recurring event in the
+    // Birthdays calendar, which a plain contact edit must not silently do.
 
     QJsonArray emails;
     const auto emailList = a.emails();

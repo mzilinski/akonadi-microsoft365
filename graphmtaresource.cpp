@@ -80,13 +80,21 @@ void GraphMtaResource::sendItem(const Akonadi::Item &item)
         return;
     }
 
+    std::shared_ptr<KMime::Message> msg;
+    if (item.hasPayload<std::shared_ptr<KMime::Message>>()) {
+        msg = item.payload<std::shared_ptr<KMime::Message>>();
+    }
+    if (!msg) {
+        itemSent(item, TransportFailed, i18n("Message to be sent has no MIME payload"));
+        return;
+    }
+
     // The key is an opaque correlation token for the sendMessage/messageSent D-Bus
     // round trip. Item::id is always set and unique; the remoteId belongs to whichever
     // resource owns the outbox folder and may be empty (unlike in the EWS MTA).
     const QString id = QString::number(item.id());
     mItemHash.insert(id, item);
 
-    auto msg = item.payload<std::shared_ptr<KMime::Message>>();
     /* Exchange re-assembles the message from parsed MIME parts and mangles
      * quoted-printable bodies (KMail's preferred encoding) in the process.
      * Force base64 on all parts — same workaround as the EWS MTA. */

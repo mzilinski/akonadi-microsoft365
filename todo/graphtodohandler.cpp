@@ -128,10 +128,15 @@ QJsonObject toJson(const KCalendarCore::Todo::Ptr &todo)
     QJsonObject json;
     json.insert(QStringLiteral("title"), todo->summary());
 
-    QJsonObject body;
-    body.insert(QStringLiteral("contentType"), QStringLiteral("text"));
-    body.insert(QStringLiteral("content"), todo->description());
-    json.insert(QStringLiteral("body"), body);
+    // Only plain-text bodies are mapped (mirroring toTodo). Omit the body when there
+    // is no local description so a server-side HTML body is not clobbered by an
+    // empty text one.
+    if (!todo->description().isEmpty()) {
+        QJsonObject body;
+        body.insert(QStringLiteral("contentType"), QStringLiteral("text"));
+        body.insert(QStringLiteral("content"), todo->description());
+        json.insert(QStringLiteral("body"), body);
+    }
 
     if (todo->dtStart().isValid()) {
         json.insert(QStringLiteral("startDateTime"), utcTaskDateTime(todo->dtStart()));
