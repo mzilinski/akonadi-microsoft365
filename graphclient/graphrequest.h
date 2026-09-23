@@ -15,6 +15,7 @@
 #include <KJob>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QNetworkReply>
 #include <QUrl>
 
 class GraphClient;
@@ -72,6 +73,9 @@ public:
     [[nodiscard]] static bool usesImmutableIds(const QString &path);
     /// User-visible text for a Graph error body ({"code", "message"}) and HTTP status.
     [[nodiscard]] static QString formatError(const QJsonObject &graphError, int httpStatus);
+    /// How long to wait before repeating a throttled request: the server's Retry-After
+    /// (capped, since a waiting request holds up the change replay), else a backoff.
+    [[nodiscard]] static int retryDelaySeconds(int retryAfter, int attempt);
     /// Failure class of an HTTP status the server answered with.
     [[nodiscard]] static Failure failureForStatus(int httpStatus);
 
@@ -94,7 +98,8 @@ private:
     QString mDeltaLink;
     QString mGraphErrorCode;
     int mRetryCount = 0;
+    bool mRequestSent = false; // the current attempt left this machine in full
     int mHttpStatus = 0;
-    int mNetworkError = 0; // QNetworkReply::NetworkError of the last reply
+    QNetworkReply::NetworkError mNetworkError = QNetworkReply::NoError; // of the last reply
     bool mNotAuthenticated = false;
 };

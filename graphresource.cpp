@@ -9,6 +9,7 @@
 #include "graph_debug.h"
 #include "graphclient/auth/graphoauth.h"
 #include "graphresourceadaptor.h"
+#include "graphretrypolicy.h"
 #include "graphsettingsbase.h"
 #include "graphsyncstateattribute.h"
 
@@ -40,6 +41,7 @@
 #include <KLocalizedString>
 #include <KMime/Message>
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QTimer>
 #include <QUrl>
 
@@ -63,6 +65,8 @@ const SpecialFolder kSpecialFolders[] = {
     {"outbox", SpecialMailCollections::Outbox, "outbox", "mail-folder-outbox"},
 };
 constexpr int kMillisecondsPerMinute = 60 * 1000;
+// How soon to try signing in again when Microsoft 365 could not be reached.
+constexpr int kSignInRetrySeconds = 60;
 
 // Graph uses a different endpoint family per collection type; mail is the default.
 enum class CollectionKind {
@@ -124,10 +128,34 @@ GraphResource::GraphResource(const QString &id)
     // delta never re-delivers it, so propagate renames explicitly.
     connect(this, &AgentBase::agentNameChanged, this, &GraphResource::updateRootCollectionName);
 
+    // ResourceBase has already put the task scheduler online. Hold it back until the
+    // first token has arrived (startSyncing() releases it): Akonadi starts replaying
+    // queued changes right away, and every one of them would fail without a token.
+    ResourceWidgetBase::doSetOnline(false);
+    // Queued: KJob reports finished() before result(), and the result handler of the
+    // last request must run before the scheduler resumes.
+    mClient.setIdleCallback([this] {
+        if (mResumeWhenIdle) {
+            QMetaObject::invokeMethod(
+                this,
+                [this] {
+                    if (mResumeWhenIdle && isOnline() && !mAuthPending) {
+                        resumeScheduler();
+                    }
+                },
+                Qt::QueuedConnection);
+        }
+    });
+
     QMetaObject::invokeMethod(this, &GraphResource::delayedInit, Qt::QueuedConnection);
 }
 
-GraphResource::~GraphResource() = default;
+GraphResource::~GraphResource()
+{
+    // Jobs still running are deleted after this object's members; their end must not
+    // call back into a resource that is going away.
+    mClient.setIdleCallback({});
+}
 
 void GraphResource::delayedInit()
 {
@@ -148,7 +176,10 @@ void GraphResource::delayedInit()
         }
     });
 
-    setUpAuth();
+    // doSetOnline(true) may already have started signing in.
+    if (!mAuthPending) {
+        setUpAuth();
+    }
 }
 
 void GraphResource::setUpAuth()
@@ -156,9 +187,12 @@ void GraphResource::setUpAuth()
     // OAuth2 (Auth Code + PKCE) against login.microsoftonline.com, Graph scopes.
     // Silent refresh via the keychain-stored refresh token; interactive browser
     // login only when that fails. Tokens are persisted via QtKeychain/KWallet.
+    mAuthPending = true;
+    mReauthenticate = false;
     mAuth.reset(new GraphOAuth(mSettings->tenantId(), mSettings->clientId(), identifier(), this));
     connect(mAuth.data(), &GraphOAuth::ready, this, &GraphResource::onAuthReady);
     connect(mAuth.data(), &GraphOAuth::failed, this, &GraphResource::onAuthFailed);
+    connect(mAuth.data(), &GraphOAuth::unreachable, this, &GraphResource::onAuthUnreachable);
     // Repoint the client before any request can run again: doSetOnline(true) re-enters
     // here while a poll sync or throttling retry may still be in flight, and such a
     // request would otherwise dereference the just-destroyed auth object in
@@ -171,6 +205,8 @@ void GraphResource::setUpAuth()
 void GraphResource::onAuthReady()
 {
     qCDebug(GRAPH_LOG) << "auth ready, starting collection tree sync";
+    mAuthPending = false;
+    mReauthenticate = false;
     reconfigureClient();
 
     // Every request now asks Graph for immutable ids (see GraphRequest::issue), so
@@ -186,7 +222,7 @@ void GraphResource::onAuthReady()
                 Q_EMIT status(Broken, i18nc("@info:status", "Failed to migrate item identifiers: %1", job->errorText()));
                 // Retry on the poll interval; syncing before the migration is done is
                 // blocked in retrieveCollections()/retrieveItems().
-                QTimer::singleShot(mSettings->pollInterval() * kMillisecondsPerMinute, this, &GraphResource::onAuthReady);
+                QTimer::singleShot(qMax(1, mSettings->pollInterval()) * kMillisecondsPerMinute, this, &GraphResource::onAuthReady);
                 return;
             }
             mSettings->setImmutableIdsMigrated(true);
@@ -202,12 +238,22 @@ void GraphResource::onAuthReady()
 void GraphResource::startSyncing()
 {
     Q_EMIT status(Idle, i18nc("@info:status", "Ready"));
+    // Release the task scheduler held back until now: requests carry a token from here on.
+    if (isOnline()) {
+        resumeScheduler();
+    }
     synchronizeCollectionTree();
 
     // No push notifications on Graph for desktop clients — poll with delta queries.
     if (!mPollTimer) {
         mPollTimer = new QTimer(this);
         connect(mPollTimer, &QTimer::timeout, this, [this] {
+            // After a suspend the token may have run out while the renewal timer stood
+            // still; every poll would fail with 401 until it fires.
+            if (mAuth && !mAuthPending && !mAuth->hasValidToken()) {
+                signInAgain();
+                return;
+            }
             synchronize();
         });
     }
@@ -219,7 +265,142 @@ void GraphResource::startSyncing()
 void GraphResource::onAuthFailed(const QString &error)
 {
     qCWarning(GRAPH_LOG) << "auth failed:" << error;
+    mAuthPending = false;
+    // Go offline like the IMAP resource does after a failed login: item requests then
+    // fail at once instead of waiting for a scheduler that has no token to work with,
+    // queued changes are kept, and switching the account online signs in again.
+    setOnline(false);
     Q_EMIT status(Broken, i18nc("@info:status", "Authentication failed: %1", error));
+}
+
+void GraphResource::onAuthUnreachable()
+{
+    mAuthPending = false;
+    if (mAuth && mAuth->hasValidToken()) {
+        return; // a background renewal; the current token still works for a while
+    }
+    qCInfo(GRAPH_LOG) << "Microsoft 365 not reachable, signing in again in" << kSignInRetrySeconds << "s";
+    // Try again shortly. Without a network the agent is offline already and nothing
+    // happens here; it signs in from doSetOnline(true) once the network returns.
+    setTemporaryOffline(kSignInRetrySeconds);
+    Q_EMIT status(Idle, i18nc("@info:status", "Microsoft 365 is not reachable, trying again shortly"));
+}
+
+void GraphResource::resumeScheduler()
+{
+    // A request started before going offline may still be out. Akonadi has put its
+    // change back at the head of the queue: replaying it now could send it a second
+    // time, and the late answer would complete whichever change runs at that moment.
+    if (mClient.isBusy()) {
+        mResumeWhenIdle = true;
+        return;
+    }
+    mResumeWhenIdle = false;
+    ResourceWidgetBase::doSetOnline(true);
+}
+
+bool GraphResource::isStale(quint64 generation) const
+{
+    return generation != mTaskGeneration;
+}
+
+bool GraphResource::startReplay(qint64 change, Replay &replay)
+{
+    replay = {mTaskGeneration, change};
+    const auto late = mLateOutcomes.constFind(change);
+    if (late == mLateOutcomes.constEnd()) {
+        return true;
+    }
+    qCDebug(GRAPH_LOG) << "replay: applying the outcome of an earlier run of change" << change;
+    const std::function<void()> finish = late.value();
+    mLateOutcomes.erase(late);
+    finish();
+    return false;
+}
+
+void GraphResource::finishReplay(const Replay &replay, const std::function<void()> &finish)
+{
+    if (isStale(replay.generation)) {
+        // Akonadi queued the change again and the scheduler waits for this answer;
+        // the next run applies what this one achieved instead of sending it twice.
+        qCDebug(GRAPH_LOG) << "replay: change" << replay.change << "finished after it was given up, keeping the outcome for its next run";
+        mLateOutcomes.insert(replay.change, finish);
+        return;
+    }
+    mLateOutcomes.remove(replay.change);
+    if (replay.change == mRetriedChange) {
+        // Through at last: a later change to the same item starts afresh.
+        mRetriedChange = 0;
+        mReplayRetries = 0;
+    }
+    finish();
+}
+
+void GraphResource::commitItem(const Replay &replay, const Akonadi::Item &item)
+{
+    finishReplay(replay, [this, item] {
+        changeCommitted(item);
+    });
+}
+
+void GraphResource::commitItems(const Replay &replay, const Akonadi::Item::List &items)
+{
+    finishReplay(replay, [this, items] {
+        changesCommitted(items);
+    });
+}
+
+void GraphResource::commitCollection(const Replay &replay, const Akonadi::Collection &collection)
+{
+    finishReplay(replay, [this, collection] {
+        changeCommitted(collection);
+    });
+}
+
+void GraphResource::skipChange(const Replay &replay)
+{
+    finishReplay(replay, [this] {
+        changeProcessed();
+    });
+}
+
+void GraphResource::failChange(const Replay &replay, const QString &message)
+{
+    finishReplay(replay, [this, message] {
+        cancelTask(message);
+    });
+}
+
+void GraphResource::trackWork(KJob *job)
+{
+    connect(job, &KJob::finished, this, [done = mClient.beginWork()] {
+        done();
+    });
+}
+
+void GraphResource::holdScheduler()
+{
+    // The running task goes back to the head of its queue; whatever it still delivers
+    // is stale now (see isStale() and resumeScheduler()).
+    ++mTaskGeneration;
+    ResourceWidgetBase::doSetOnline(false);
+    // A task the scheduler started anyway (its next step does not check whether it is
+    // online) goes back too; without one this does nothing.
+    deferTask();
+    // ResourceBase does not stop the jobs it attached to the given-up task (a commit, a
+    // payload store): they finish and then complete whichever task runs by then. Keep
+    // the scheduler held until they are through; the session runs its jobs in order,
+    // so this one ends after them.
+    trackWork(new CollectionFetchJob(Collection::root(), CollectionFetchJob::Base, this));
+}
+
+void GraphResource::signInAgain()
+{
+    // Hold the scheduler back: startSyncing() releases it once the new token is there.
+    holdScheduler();
+    if (!mAuthPending) {
+        setUpAuth();
+    }
 }
 
 void GraphResource::reconfigureClient()
@@ -230,12 +411,124 @@ void GraphResource::reconfigureClient()
 
 void GraphResource::doSetOnline(bool online)
 {
-    ResourceWidgetBase::doSetOnline(online);
-    if (online) {
-        setUpAuth();
-    } else if (mPollTimer) {
-        mPollTimer->stop();
+    if (!online) {
+        holdScheduler();
+        if (mPollTimer) {
+            mPollTimer->stop();
+        }
+        return;
     }
+    if (mAuth && !mAuthPending && !mReauthenticate && mAuth->hasValidToken() && mSettings->immutableIdsMigrated()) {
+        // Back after a held-back replay or a network change, with a token that is
+        // still good (GraphOAuth renews it in the background, but not during suspend):
+        // carry on where we were, without signing in again or re-listing the folder tree.
+        resumeScheduler();
+        if (mPollTimer && mSettings->pollInterval() > 0) {
+            mPollTimer->start(mSettings->pollInterval() * kMillisecondsPerMinute);
+        }
+        return;
+    }
+    signInAgain();
+}
+
+// Graph drops a second POST of an event with the same transactionId, which covers a
+// create that goes out again after its answer got lost. Not documented as a lasting
+// guarantee, so it backs up retryLater()'s caution rather than replacing it. Stable
+// across the attempts of one change, different per target calendar and per move
+// (the current server id changes with each), so that moving an event back to a
+// calendar it was in never repeats an id.
+static QString eventTransactionId(const Item &item, const Collection &target)
+{
+    const QByteArray key = QByteArray::number(item.id()) + '/' + item.remoteId().toUtf8() + '/' + target.remoteId().toUtf8();
+    return QString::fromLatin1(QCryptographicHash::hash(key, QCryptographicHash::Sha1).toHex());
+}
+
+// Identifies a change for retryLater(): the Akonadi id of its first item.
+static qint64 changeId(const Item::List &items)
+{
+    return items.isEmpty() ? 0 : items.constFirst().id();
+}
+
+bool GraphResource::retryLater(KJob *job, const Replay &replay, bool repeatable, bool applied)
+{
+    if (!job || !job->error()) {
+        return false; // finishReplay() resets the attempt count
+    }
+    int notExecuted = 0;
+    int uncertain = 0;
+    int permanent = 0;
+    bool authRejected = false;
+    if (auto batch = qobject_cast<GraphBatchJob *>(job)) {
+        notExecuted = batch->failed(GraphRequest::Failure::NotExecuted);
+        uncertain = batch->failed(GraphRequest::Failure::Uncertain);
+        permanent = batch->failed(GraphRequest::Failure::Permanent);
+        authRejected = batch->authenticationRejected();
+        applied = applied || batch->succeeded() > 0;
+    } else if (auto req = qobject_cast<GraphRequest *>(job)) {
+        switch (req->failure()) {
+        case GraphRequest::Failure::None:
+            break;
+        case GraphRequest::Failure::NotExecuted:
+            notExecuted = 1;
+            break;
+        case GraphRequest::Failure::Uncertain:
+            uncertain = 1;
+            break;
+        case GraphRequest::Failure::Permanent:
+            permanent = 1;
+            break;
+        }
+        authRejected = req->authenticationRejected();
+    }
+    const qint64 change = replay.change;
+    if (isStale(replay.generation)) {
+        // The change is queued again and goes out once the scheduler resumes, which
+        // waits for this answer. Keep it so if it may go out again; otherwise the
+        // caller's failChange() drops it on that run.
+        return GraphRetryPolicy::decide(repeatable, applied, notExecuted, uncertain, permanent, 0).retry;
+    }
+    if (change != mRetriedChange) {
+        mRetriedChange = change;
+        mReplayRetries = 0;
+    }
+    const GraphRetryPolicy::Decision decision = GraphRetryPolicy::decide(repeatable, applied, notExecuted, uncertain, permanent, mReplayRetries);
+    if (!decision.retry) {
+        if (mReplayRetries > 0) {
+            qCWarning(GRAPH_LOG) << "replay: giving up on change" << change << "after" << mReplayRetries << "attempts:" << job->errorText();
+        }
+        mRetriedChange = 0;
+        mReplayRetries = 0;
+        return false;
+    }
+    ++mReplayRetries;
+    mReauthenticate = mReauthenticate || authRejected;
+    qCWarning(GRAPH_LOG) << "replay: keeping change" << change << "for another attempt in" << decision.delaySeconds << "s:" << job->errorText();
+    // Going offline aborts the running task and puts it back at the head of its queue;
+    // doSetOnline(true) resumes afterwards (signing in again only after a 401).
+    setTemporaryOffline(decision.delaySeconds);
+    // When the agent was offline already, that did nothing; the scheduler may still
+    // have started this task (its next step does not check), so put it back here.
+    deferTask();
+    // After going offline, which resets the status message.
+    Q_EMIT status(Idle,
+                  i18ncp("@info:status",
+                         "Microsoft 365 did not take a change, retrying in %1 second",
+                         "Microsoft 365 did not take a change, retrying in %1 seconds",
+                         decision.delaySeconds));
+    return true;
+}
+
+void GraphResource::announceReplay(GraphBatchJob *job, int count)
+{
+    // Called before the caller connects its own result handler, so "Ready" is out
+    // before that handler reports an error or holds the change back.
+    Q_EMIT status(Running, i18ncp("@info:status", "Applying %1 change", "Applying %1 changes", count));
+    connect(job, &KJob::percentChanged, this, [this](KJob *, unsigned long progress) {
+        Q_EMIT percent(static_cast<int>(progress));
+    });
+    connect(job, &KJob::result, this, [this] {
+        Q_EMIT status(Idle, i18nc("@info:status", "Ready"));
+    });
 }
 
 void GraphResource::updateRootCollectionName(const QString &name)
@@ -273,7 +566,7 @@ void GraphResource::reloadConfig()
         if (mAuth) {
             mAuth->forgetTokens();
         }
-        setUpAuth();
+        signInAgain();
     } else if (mPollTimer) {
         if (mSettings->pollInterval() > 0) {
             mPollTimer->start(mSettings->pollInterval() * kMillisecondsPerMinute);
@@ -297,6 +590,7 @@ void GraphResource::retrieveCollections()
     // Resolve the well-known folder ids once per session, then fetch the folder tree.
     // The special-folder attributes are applied inline while delivering collections
     // (below), so the normal collection sync persists them — no extra modify jobs.
+    const quint64 generation = mTaskGeneration;
     if (mSpecialFolderIndex.isEmpty()) {
         QList<GraphBatchJob::Call> calls;
         for (const auto &sf : kSpecialFolders) {
@@ -304,7 +598,10 @@ void GraphResource::retrieveCollections()
         }
         auto job = new GraphBatchJob(mClient, calls, this);
         job->setIgnoreNotFound(true); // a mailbox may lack e.g. a real Outbox folder
-        connect(job, &KJob::result, this, [this, job](KJob *kjob) {
+        connect(job, &KJob::result, this, [this, job, generation](KJob *kjob) {
+            if (isStale(generation)) {
+                return;
+            }
             if (!kjob->error()) {
                 const QList<QJsonObject> responses = job->responses();
                 for (int i = 0; i < responses.size() && i < int(std::size(kSpecialFolders)); ++i) {
@@ -320,18 +617,18 @@ void GraphResource::retrieveCollections()
             } else {
                 qCWarning(GRAPH_LOG) << "special folder resolve failed:" << kjob->errorText();
             }
-            fetchExtraCollections();
+            fetchExtraCollections(generation);
         });
         job->start();
     } else {
         // Special-folder ids are stable per mailbox; the calendar/contact/todo
         // collections are cheap to list and must be re-fetched so server-side
         // additions, renames and deletions show up without a resource restart.
-        fetchExtraCollections();
+        fetchExtraCollections(generation);
     }
 }
 
-void GraphResource::fetchExtraCollections()
+void GraphResource::fetchExtraCollections(quint64 generation)
 {
     // Calendars + a default contacts collection, re-fetched on every tree sync and
     // delivered alongside the mail folders. Content mime types drive the
@@ -341,12 +638,15 @@ void GraphResource::fetchExtraCollections()
     // Calendar ids become collection remoteIds and must stay in the traditional form —
     // IdType would rewrite them and the tree sync would see all calendars as replaced.
     req->setUseImmutableIds(false);
-    connect(req, &KJob::result, this, [this, req](KJob *job) {
+    connect(req, &KJob::result, this, [this, req, generation](KJob *job) {
+        if (isStale(generation)) {
+            return;
+        }
         if (job->error()) {
             // Keep the previous set: replacing it with a partial one would make the
             // known-ids diff report the missing collections as deleted on the server.
             qCWarning(GRAPH_LOG) << "calendar list failed, keeping cached collections:" << job->errorText();
-            fetchFolderTree();
+            fetchFolderTree(generation);
             return;
         }
         Collection::List fresh;
@@ -384,17 +684,20 @@ void GraphResource::fetchExtraCollections()
         contacts.attribute<EntityDisplayAttribute>(Collection::AddIfMissing)->setIconName(QStringLiteral("view-pim-contacts"));
         fresh.append(contacts);
 
-        fetchTodoListCollections(fresh);
+        fetchTodoListCollections(fresh, generation);
     });
     req->start();
 }
 
-void GraphResource::fetchTodoListCollections(Akonadi::Collection::List fresh)
+void GraphResource::fetchTodoListCollections(Akonadi::Collection::List fresh, quint64 generation)
 {
     // Task lists (Microsoft To Do): GET /me/todo/lists -> one collection per list.
     auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/todo/lists"));
-    connect(req, &KJob::result, this, [this, req, fresh](KJob *job) mutable {
+    connect(req, &KJob::result, this, [this, req, fresh, generation](KJob *job) mutable {
+        if (isStale(generation)) {
+            return;
+        }
         if (!job->error()) {
             for (const auto &v : req->aggregatedValue()) {
                 const QJsonObject list = v.toObject();
@@ -418,17 +721,19 @@ void GraphResource::fetchTodoListCollections(Akonadi::Collection::List fresh)
             // Keep the previous set — see fetchExtraCollections().
             qCWarning(GRAPH_LOG) << "todo list fetch failed, keeping cached collections:" << job->errorText();
         }
-        fetchFolderTree();
+        fetchFolderTree(generation);
     });
     req->start();
 }
 
-void GraphResource::fetchFolderTree()
+void GraphResource::fetchFolderTree(quint64 generation)
 {
     qCDebug(GRAPH_LOG) << "retrieveCollections, incremental:" << !mFolderDeltaLink.isEmpty();
     // GET /me/mailFolders/delta  (uses stored top-level deltaLink for incremental sync)
     auto job = new GraphFetchFoldersJob(mClient, mRootCollection, mFolderDeltaLink, this);
-    connect(job, &KJob::result, this, &GraphResource::fetchFoldersJobFinished);
+    connect(job, &KJob::result, this, [this, generation](KJob *job) {
+        fetchFoldersJobFinished(job, generation);
+    });
     job->start();
 }
 
@@ -450,8 +755,12 @@ void GraphResource::applySpecialAttributes(Akonadi::Collection &col)
     qCDebug(GRAPH_LOG) << "tagged special collection" << col.name() << "as" << sf.attributeType;
 }
 
-void GraphResource::fetchFoldersJobFinished(KJob *job)
+void GraphResource::fetchFoldersJobFinished(KJob *job, quint64 generation)
 {
+    // Before the deltaLink is saved: the changes it covers would never be delivered.
+    if (isStale(generation)) {
+        return;
+    }
     if (job->error()) {
         cancelTask(job->errorText());
         return;
@@ -501,7 +810,7 @@ void GraphResource::fetchFoldersJobFinished(KJob *job)
         if (removed.isEmpty()) {
             collectionsRetrievedIncremental(changed, removed);
         } else {
-            deliverIncrementalTree(changed, removed);
+            deliverIncrementalTree(changed, removed, generation);
         }
     } else {
         Collection::List cols = fj->allCollections();
@@ -515,7 +824,7 @@ void GraphResource::fetchFoldersJobFinished(KJob *job)
     mKnownExtraIds = currentExtraIds;
 }
 
-void GraphResource::deliverIncrementalTree(const Akonadi::Collection::List &changed, const Akonadi::Collection::List &removed)
+void GraphResource::deliverIncrementalTree(const Akonadi::Collection::List &changed, const Akonadi::Collection::List &removed, quint64 generation)
 {
     // CollectionSync matches a removed collection only inside its parent's bucket, so
     // a tombstone carrying just the remote id is silently dropped. Resolve each one to
@@ -523,7 +832,10 @@ void GraphResource::deliverIncrementalTree(const Akonadi::Collection::List &chan
     auto fetch = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive, this);
     fetch->fetchScope().setResource(identifier());
     fetch->fetchScope().setAncestorRetrieval(CollectionFetchScope::Parent);
-    connect(fetch, &CollectionFetchJob::result, this, [this, changed, removed](KJob *job) {
+    connect(fetch, &CollectionFetchJob::result, this, [this, changed, removed, generation](KJob *job) {
+        if (isStale(generation)) {
+            return;
+        }
         Collection::List resolved;
         if (job->error()) {
             qCWarning(GRAPH_LOG) << "could not resolve removed collections:" << job->errorText();
@@ -559,7 +871,9 @@ void GraphResource::retrieveItems(const Akonadi::Collection &collection)
             : mimeTypes.contains(GraphTodoHandler::mimeType())              ? GraphFetchPimItemsJob::Type::Todos
                                                                             : GraphFetchPimItemsJob::Type::Contacts;
         auto job = new GraphFetchPimItemsJob(mClient, collection, type, collectionDeltaLink(collection), this);
-        connect(job, &KJob::result, this, &GraphResource::fetchPimItemsJobFinished);
+        connect(job, &KJob::result, this, [this, generation = mTaskGeneration](KJob *job) {
+            fetchPimItemsJobFinished(job, generation);
+        });
         job->start();
         return;
     }
@@ -567,12 +881,17 @@ void GraphResource::retrieveItems(const Akonadi::Collection &collection)
     // Mail: GET /me/mailFolders/{id}/messages/delta  (per-collection deltaLink)
     const QString deltaLink = collectionDeltaLink(collection);
     auto job = new GraphFetchItemsJob(mClient, collection, deltaLink, this);
-    connect(job, &KJob::result, this, &GraphResource::fetchItemsJobFinished);
+    connect(job, &KJob::result, this, [this, generation = mTaskGeneration](KJob *job) {
+        fetchItemsJobFinished(job, generation);
+    });
     job->start();
 }
 
-void GraphResource::fetchItemsJobFinished(KJob *job)
+void GraphResource::fetchItemsJobFinished(KJob *job, quint64 generation)
 {
+    if (isStale(generation)) {
+        return;
+    }
     if (job->error()) {
         cancelTask(job->errorText());
         return;
@@ -581,11 +900,14 @@ void GraphResource::fetchItemsJobFinished(KJob *job)
     qCDebug(GRAPH_LOG) << "mail delta" << fj->collection().name() << "changed:" << fj->changedItems().size() << "removed:" << fj->removedItems().size()
                        << "deltaLink:" << (fj->deltaLink().isEmpty() ? "none" : "present");
     // Delta returns light stubs (id/flags); payload is fetched on demand below.
-    deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink());
+    deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink(), generation);
 }
 
-void GraphResource::fetchPimItemsJobFinished(KJob *job)
+void GraphResource::fetchPimItemsJobFinished(KJob *job, quint64 generation)
 {
+    if (isStale(generation)) {
+        return;
+    }
     if (job->error()) {
         cancelTask(job->errorText());
         return;
@@ -593,10 +915,14 @@ void GraphResource::fetchPimItemsJobFinished(KJob *job)
     auto *fj = qobject_cast<GraphFetchPimItemsJob *>(job);
     qCDebug(GRAPH_LOG) << "pim delta" << fj->collection().name() << "changed:" << fj->changedItems().size() << "removed:" << fj->removedItems().size()
                        << "deltaLink:" << (fj->deltaLink().isEmpty() ? "none" : "present");
-    deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink());
+    deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink(), generation);
 }
 
-void GraphResource::deliverItemsIncremental(const Collection &collection, const Item::List &changed, const Item::List &removed, const QString &deltaLink)
+void GraphResource::deliverItemsIncremental(const Collection &collection,
+                                            const Item::List &changed,
+                                            const Item::List &removed,
+                                            const QString &deltaLink,
+                                            quint64 generation)
 {
     // Deltas may tombstone items this cache never saw (removed server-side between two
     // polls, or emitted under a different id encoding by old Graph responses). ItemSync
@@ -605,7 +931,10 @@ void GraphResource::deliverItemsIncremental(const Collection &collection, const 
     if (!removed.isEmpty()) {
         auto known = new ItemFetchJob(collection, this);
         known->fetchScope().setFetchModificationTime(false);
-        connect(known, &ItemFetchJob::result, this, [this, collection, changed, removed, deltaLink, known](KJob *job) {
+        connect(known, &ItemFetchJob::result, this, [this, collection, changed, removed, deltaLink, known, generation](KJob *job) {
+            if (isStale(generation)) {
+                return;
+            }
             if (job->error()) {
                 cancelTask(job->errorText());
                 return;
@@ -624,14 +953,18 @@ void GraphResource::deliverItemsIncremental(const Collection &collection, const 
             if (knownRemoved.size() != removed.size()) {
                 qCDebug(GRAPH_LOG) << "dropping" << removed.size() - knownRemoved.size() << "tombstones for items not in the local cache";
             }
-            syncItemsIncremental(collection, changed, knownRemoved, deltaLink);
+            syncItemsIncremental(collection, changed, knownRemoved, deltaLink, generation);
         });
         return;
     }
-    syncItemsIncremental(collection, changed, removed, deltaLink);
+    syncItemsIncremental(collection, changed, removed, deltaLink, generation);
 }
 
-void GraphResource::syncItemsIncremental(const Collection &collection, const Item::List &changed, const Item::List &removed, const QString &deltaLink)
+void GraphResource::syncItemsIncremental(const Collection &collection,
+                                         const Item::List &changed,
+                                         const Item::List &removed,
+                                         const QString &deltaLink,
+                                         quint64 generation)
 {
     // Run the ItemSync ourselves instead of via itemsRetrievedIncremental() so the
     // deltaLink is persisted only after the local commit succeeded. Saving it upfront
@@ -640,12 +973,18 @@ void GraphResource::syncItemsIncremental(const Collection &collection, const Ite
     auto sync = new ItemSync(collection, {}, this);
     sync->setTransactionMode(ItemSync::SingleTransaction);
     // Connect before feeding: an empty delta finishes inside setIncrementalSyncItems().
-    connect(sync, &ItemSync::result, this, [this, collection, deltaLink](KJob *job) {
+    connect(sync, &ItemSync::result, this, [this, collection, deltaLink, generation](KJob *job) {
+        if (!job->error()) {
+            // Committed: the deltaLink is right even when the task has been given up.
+            saveCollectionDeltaLink(collection, deltaLink);
+        }
+        if (isStale(generation)) {
+            return;
+        }
         if (job->error()) {
             cancelTask(job->errorText());
             return;
         }
-        saveCollectionDeltaLink(collection, deltaLink);
         itemsRetrievalDone();
     });
     sync->setIncrementalSyncItems(changed, removed);
@@ -668,6 +1007,7 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unus
             const bool isTodo = mime == GraphTodoHandler::mimeType();
             auto pending = std::make_shared<Item::List>();
             auto remaining = std::make_shared<int>(items.size());
+            const quint64 generation = mTaskGeneration;
             for (const Item &item : items) {
                 auto req = new GraphRequest(mClient, this);
                 if (isEvent) {
@@ -680,7 +1020,7 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unus
                 if (isEvent) {
                     req->addHeader("Prefer", "outlook.timezone=\"UTC\"");
                 }
-                connect(req, &KJob::result, this, [this, item, req, isEvent, isTodo, pending, remaining](KJob *j) {
+                connect(req, &KJob::result, this, [this, item, req, isEvent, isTodo, pending, remaining, generation](KJob *j) {
                     if (!j->error()) {
                         Item filled(item);
                         if (isEvent) {
@@ -699,7 +1039,7 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unus
                         pending->append(filled);
                     }
                     if (--(*remaining) == 0) {
-                        deliverFreshPayloads(*pending);
+                        deliverFreshPayloads(*pending, generation);
                     }
                 });
                 req->start();
@@ -710,24 +1050,32 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unus
 
     // Mail: GET /me/messages/{id}/$value  -> raw MIME -> KMime::Message
     auto job = new GraphFetchItemPayloadJob(mClient, items, this);
-    connect(job, &KJob::result, this, &GraphResource::fetchPayloadJobFinished);
+    connect(job, &KJob::result, this, [this, generation = mTaskGeneration](KJob *job) {
+        fetchPayloadJobFinished(job, generation);
+    });
     job->start();
     return true;
 }
 
-void GraphResource::fetchPayloadJobFinished(KJob *job)
+void GraphResource::fetchPayloadJobFinished(KJob *job, quint64 generation)
 {
+    if (isStale(generation)) {
+        return;
+    }
     if (job->error()) {
         qCWarning(GRAPH_LOG) << "payload fetch failed:" << job->errorText();
         cancelTask(job->errorText());
         return;
     }
     auto *fj = qobject_cast<GraphFetchItemPayloadJob *>(job);
-    deliverFreshPayloads(fj->items());
+    deliverFreshPayloads(fj->items(), generation);
 }
 
-void GraphResource::deliverFreshPayloads(const Item::List &filled)
+void GraphResource::deliverFreshPayloads(const Item::List &filled, quint64 generation)
 {
+    if (isStale(generation)) {
+        return;
+    }
     if (filled.isEmpty()) {
         cancelTask(i18n("The requested items no longer exist"));
         return;
@@ -740,7 +1088,10 @@ void GraphResource::deliverFreshPayloads(const Item::List &filled)
     auto fetch = new ItemFetchJob(filled, this);
     fetch->fetchScope().setFetchModificationTime(false);
     fetch->fetchScope().setAncestorRetrieval(ItemFetchScope::Parent);
-    connect(fetch, &ItemFetchJob::result, this, [this, filled, fetch](KJob *job) {
+    connect(fetch, &ItemFetchJob::result, this, [this, filled, fetch, generation](KJob *job) {
+        if (isStale(generation)) {
+            return;
+        }
         if (job->error()) {
             cancelTask(job->errorText());
             return;
@@ -772,6 +1123,10 @@ void GraphResource::itemsFlagsChanged(const Item::List &items,
                                       [[maybe_unused]] const QSet<QByteArray> &removedFlags)
 {
     qCDebug(GRAPH_LOG) << "replay: flags changed on" << items.size() << "items";
+    Replay replay;
+    if (!startReplay(changeId(items), replay)) {
+        return;
+    }
     // item.flags() already carries the final state, so the added/removed sets are not needed.
     QList<GraphBatchJob::Call> calls;
     calls.reserve(items.size());
@@ -782,11 +1137,15 @@ void GraphResource::itemsFlagsChanged(const Item::List &items,
     // A flag on a message that is already gone server-side is moot, and failing the
     // whole batch over it would drop the flags of every other message with it.
     job->setIgnoreNotFound(true);
-    connect(job, &KJob::result, this, [this, items](KJob *job) {
+    announceReplay(job, items.size());
+    connect(job, &KJob::result, this, [this, items, replay](KJob *job) {
+        if (retryLater(job, replay, true, false)) {
+            return;
+        }
         if (job->error()) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
         } else {
-            changesCommitted(items);
+            commitItems(replay, items);
         }
     });
     job->start();
@@ -795,23 +1154,28 @@ void GraphResource::itemsFlagsChanged(const Item::List &items,
 void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partIdentifiers)
 {
     qCDebug(GRAPH_LOG) << "replay: item changed" << item.remoteId() << item.mimeType() << "parts" << partIdentifiers;
+    Replay replay;
+    if (!startReplay(item.id(), replay)) {
+        return;
+    }
     const QString mime = item.mimeType();
     if (mime == GraphEventHandler::mimeType() && item.hasPayload<KCalendarCore::Incidence::Ptr>()) {
         auto incidence = item.payload<KCalendarCore::Incidence::Ptr>();
         auto event = incidence.dynamicCast<KCalendarCore::Event>();
         if (event) {
-            patchPimItem(item, QStringLiteral("/me/events/%1").arg(item.remoteId()), GraphEventHandler::toJson(event));
+            patchPimItem(item, QStringLiteral("/me/events/%1").arg(item.remoteId()), GraphEventHandler::toJson(event), replay);
             return;
         }
     } else if (mime == GraphContactHandler::mimeType() && item.hasPayload<KContacts::Addressee>()) {
-        patchPimItem(item, QStringLiteral("/me/contacts/%1").arg(item.remoteId()), GraphContactHandler::toJson(item.payload<KContacts::Addressee>()));
+        patchPimItem(item, QStringLiteral("/me/contacts/%1").arg(item.remoteId()), GraphContactHandler::toJson(item.payload<KContacts::Addressee>()), replay);
         return;
     } else if (mime == GraphTodoHandler::mimeType() && item.hasPayload<KCalendarCore::Incidence::Ptr>()) {
         auto todo = item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>();
         if (todo) {
             patchPimItem(item,
                          QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(item.parentCollection().remoteId(), item.remoteId()),
-                         GraphTodoHandler::toJson(todo));
+                         GraphTodoHandler::toJson(todo),
+                         replay);
             return;
         }
     }
@@ -820,7 +1184,7 @@ void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partId
     // Graph only accepts as a draft — exactly what we want), then delete the old copy.
     if (mime == GraphMailHandler::mimeType() && partIdentifiers.contains(QByteArrayLiteral("PLD:RFC822")) && item.hasPayload<std::shared_ptr<KMime::Message>>()
         && isDraftsCollection(item.parentCollection())) {
-        replaceDraft(item);
+        replaceDraft(item, replay);
         return;
     }
     // Other mail edits (attribute-only changes, non-draft folders) stay local-only.
@@ -833,7 +1197,7 @@ bool GraphResource::isDraftsCollection(const Akonadi::Collection &col) const
     return it != mSpecialFolderIndex.constEnd() && qstrcmp(kSpecialFolders[it.value()].attributeType, "drafts") == 0;
 }
 
-void GraphResource::replaceDraft(const Akonadi::Item &item)
+void GraphResource::replaceDraft(const Akonadi::Item &item, const Replay &replay)
 {
     const auto [rawMime, contentType] = GraphMailHandler::createFromMime(item);
     if (rawMime.isEmpty()) {
@@ -841,32 +1205,39 @@ void GraphResource::replaceDraft(const Akonadi::Item &item)
         return;
     }
     // Create first, delete afterwards — a failure in between must never lose content.
-    createMimeMessage(rawMime, contentType, item.parentCollection().remoteId(), [this, item](const QString &newId, const QString &error) {
-        if (newId.isEmpty()) {
-            cancelTask(error);
-            return;
-        }
-        auto del = new GraphRequest(mClient, this);
-        del->setMethod(GraphRequest::Method::Delete);
-        del->setPath(QStringLiteral("/me/messages/%1").arg(item.remoteId()));
-        connect(del, &KJob::result, this, [this, item, newId, del](KJob *dj) {
-            if (dj->error() && del->httpStatus() != 404) {
-                // The new draft exists; committing it is still right. The stale copy
-                // will surface in the next delta and can be deleted by the user.
-                qCWarning(GRAPH_LOG) << "could not delete the old draft" << item.remoteId() << ":" << dj->errorText();
-            }
-            Item newItem(item);
-            newItem.setRemoteId(newId);
-            changeCommitted(newItem);
-        });
-        del->start();
-    });
+    createMimeMessage(rawMime,
+                      contentType,
+                      item.parentCollection().remoteId(),
+                      [this, item, replay](const QString &newId, const QString &error, KJob *failedCreate) {
+                          if (newId.isEmpty()) {
+                              // Only a failed create leaves nothing behind that a retry could duplicate.
+                              if (retryLater(failedCreate, replay, false, false)) {
+                                  return;
+                              }
+                              failChange(replay, error);
+                              return;
+                          }
+                          auto del = new GraphRequest(mClient, this);
+                          del->setMethod(GraphRequest::Method::Delete);
+                          del->setPath(QStringLiteral("/me/messages/%1").arg(item.remoteId()));
+                          connect(del, &KJob::result, this, [this, item, newId, del, replay](KJob *dj) {
+                              if (dj->error() && del->httpStatus() != 404) {
+                                  // The new draft exists; committing it is still right. The stale copy
+                                  // will surface in the next delta and can be deleted by the user.
+                                  qCWarning(GRAPH_LOG) << "could not delete the old draft" << item.remoteId() << ":" << dj->errorText();
+                              }
+                              Item newItem(item);
+                              newItem.setRemoteId(newId);
+                              commitItem(replay, newItem);
+                          });
+                          del->start();
+                      });
 }
 
 void GraphResource::createMimeMessage(const QByteArray &rawMime,
                                       const QByteArray &contentType,
                                       const QString &targetFolderRid,
-                                      const std::function<void(const QString &, const QString &)> &done)
+                                      const std::function<void(const QString &, const QString &, KJob *)> &done)
 {
     // Graph ingests MIME only on the unscoped /me/messages endpoint — the folder-scoped
     // variant rejects the identical body with HTTP 400 UnableToDeserializePostBody. The
@@ -878,13 +1249,17 @@ void GraphResource::createMimeMessage(const QByteArray &rawMime,
     create->setRawBody(rawMime, contentType);
     connect(create, &KJob::result, this, [this, targetFolderRid, done, create](KJob *job) {
         if (job->error()) {
-            done(QString(), job->errorText());
+            done(QString(), job->errorText(), job);
             return;
         }
         const QJsonObject response = create->responseObject();
         const QString id = response.value(QLatin1String("id")).toString();
+        if (id.isEmpty()) {
+            done(QString(), i18n("The server did not return an identifier for the new message"), nullptr);
+            return;
+        }
         if (response.value(QLatin1String("parentFolderId")).toString() == targetFolderRid) {
-            done(id, QString());
+            done(id, QString(), nullptr);
             return;
         }
         auto move = new GraphRequest(mClient, this);
@@ -893,27 +1268,31 @@ void GraphResource::createMimeMessage(const QByteArray &rawMime,
         move->setBody(QJsonObject{{QStringLiteral("destinationId"), targetFolderRid}});
         connect(move, &KJob::result, this, [move, done](KJob *mj) {
             if (mj->error()) {
-                done(QString(), mj->errorText());
+                done(QString(), mj->errorText(), nullptr);
                 return;
             }
-            done(move->responseObject().value(QLatin1String("id")).toString(), QString());
+            const QString movedId = move->responseObject().value(QLatin1String("id")).toString();
+            done(movedId, movedId.isEmpty() ? i18n("The server did not return an identifier for the new message") : QString(), nullptr);
         });
         move->start();
     });
     create->start();
 }
 
-void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body)
+void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body, const Replay &replay)
 {
     auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Method::Patch);
     req->setPath(path);
     req->setBody(body);
-    connect(req, &KJob::result, this, [this, item](KJob *job) {
+    connect(req, &KJob::result, this, [this, item, replay](KJob *job) {
+        if (retryLater(job, replay, true, false)) {
+            return;
+        }
         if (job->error()) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
         } else {
-            putContactPhotoThenCommit(item);
+            putContactPhotoThenCommit(item, replay);
         }
     });
     req->start();
@@ -922,6 +1301,10 @@ void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path,
 void GraphResource::itemAdded(const Item &item, const Collection &collection)
 {
     qCDebug(GRAPH_LOG) << "replay: item added to" << collection.name() << item.mimeType();
+    Replay replay;
+    if (!startReplay(item.id(), replay)) {
+        return;
+    }
     const QString mime = item.mimeType();
     // Calendar event -> POST /me/calendars/{cal}/events
     if (mime == GraphEventHandler::mimeType()) {
@@ -932,7 +1315,9 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
             event = item.payload<KCalendarCore::Event::Ptr>();
         }
         if (event) {
-            postPimItem(item, QStringLiteral("/me/calendars/%1/events").arg(collection.remoteId()), GraphEventHandler::toJson(event));
+            QJsonObject body = GraphEventHandler::toJson(event);
+            body.insert(QStringLiteral("transactionId"), eventTransactionId(item, collection));
+            postPimItem(item, QStringLiteral("/me/calendars/%1/events").arg(collection.remoteId()), body, true, replay);
         } else {
             qCWarning(GRAPH_LOG) << "event itemAdded without usable payload";
             changeProcessed();
@@ -942,7 +1327,7 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
     // Contact -> POST /me/contacts (default folder)
     if (mime == GraphContactHandler::mimeType()) {
         if (item.hasPayload<KContacts::Addressee>()) {
-            postPimItem(item, QStringLiteral("/me/contacts"), GraphContactHandler::toJson(item.payload<KContacts::Addressee>()));
+            postPimItem(item, QStringLiteral("/me/contacts"), GraphContactHandler::toJson(item.payload<KContacts::Addressee>()), false, replay);
         } else {
             changeProcessed();
         }
@@ -955,7 +1340,7 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
             todo = item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>();
         }
         if (todo) {
-            postPimItem(item, QStringLiteral("/me/todo/lists/%1/tasks").arg(collection.remoteId()), GraphTodoHandler::toJson(todo));
+            postPimItem(item, QStringLiteral("/me/todo/lists/%1/tasks").arg(collection.remoteId()), GraphTodoHandler::toJson(todo), false, replay);
         } else {
             qCWarning(GRAPH_LOG) << "todo itemAdded without usable payload";
             changeProcessed();
@@ -971,7 +1356,7 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
         auto *midHeader = msg->messageID(KMime::DontCreate);
         const QString messageId = midHeader ? midHeader->asUnicodeString() : QString();
         if (!messageId.isEmpty()) {
-            reconcileSentItem(item, messageId);
+            reconcileSentItem(item, messageId, replay);
             return;
         }
     }
@@ -981,31 +1366,38 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
         changeProcessed();
         return;
     }
-    createMimeMessage(rawMime, contentType, collection.remoteId(), [this, item](const QString &newId, const QString &error) {
+    createMimeMessage(rawMime, contentType, collection.remoteId(), [this, item, replay](const QString &newId, const QString &error, KJob *failedCreate) {
         if (newId.isEmpty()) {
-            cancelTask(error);
+            // Only a failed create leaves nothing behind that a retry could duplicate.
+            if (retryLater(failedCreate, replay, false, false)) {
+                return;
+            }
+            failChange(replay, error);
             return;
         }
         Item newItem(item);
         newItem.setRemoteId(newId);
-        changeCommitted(newItem);
+        commitItem(replay, newItem);
     });
 }
 
-void GraphResource::postPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body)
+void GraphResource::postPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body, bool repeatable, const Replay &replay)
 {
     auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Method::Post);
     req->setPath(path);
     req->setBody(body);
-    connect(req, &KJob::result, this, [this, item, req](KJob *job) {
+    connect(req, &KJob::result, this, [this, item, req, repeatable, replay](KJob *job) {
+        if (retryLater(job, replay, repeatable, false)) {
+            return;
+        }
         if (job->error()) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
             return;
         }
         Item newItem(item);
         newItem.setRemoteId(req->responseObject().value(QLatin1String("id")).toString());
-        putContactPhotoThenCommit(newItem);
+        putContactPhotoThenCommit(newItem, replay);
     });
     req->start();
 }
@@ -1014,10 +1406,11 @@ void GraphResource::movePimItem(const Item::List &items,
                                 int index,
                                 const std::shared_ptr<Item::List> &moved,
                                 const Collection &source,
-                                const Collection &destination)
+                                const Collection &destination,
+                                const Replay &replay)
 {
     if (index >= items.size()) {
-        changesCommitted(*moved);
+        commitItems(replay, *moved);
         return;
     }
     const Item item = items.at(index);
@@ -1028,7 +1421,7 @@ void GraphResource::movePimItem(const Item::List &items,
         const auto todo =
             item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>() : nullptr;
         if (!todo) {
-            cancelTask(i18n("Cannot move task %1: no payload", item.remoteId()));
+            failChange(replay, i18n("Cannot move task %1: no payload", item.remoteId()));
             return;
         }
         body = GraphTodoHandler::toJson(todo);
@@ -1036,10 +1429,11 @@ void GraphResource::movePimItem(const Item::List &items,
         const auto event =
             item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Event>() : nullptr;
         if (!event) {
-            cancelTask(i18n("Cannot move event %1: no payload", item.remoteId()));
+            failChange(replay, i18n("Cannot move event %1: no payload", item.remoteId()));
             return;
         }
         body = GraphEventHandler::toJson(event);
+        body.insert(QStringLiteral("transactionId"), eventTransactionId(item, destination));
     }
 
     auto create = new GraphRequest(mClient, this);
@@ -1047,9 +1441,13 @@ void GraphResource::movePimItem(const Item::List &items,
     create->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks").arg(destination.remoteId())
                            : QStringLiteral("/me/calendars/%1/events").arg(destination.remoteId()));
     create->setBody(body);
-    connect(create, &KJob::result, this, [this, create, items, index, moved, source, destination, item, isTodo](KJob *job) {
+    connect(create, &KJob::result, this, [this, create, items, index, moved, source, destination, item, isTodo, replay](KJob *job) {
+        // From the second item on, the first ones already exist in the destination.
+        if (retryLater(job, replay, false, index > 0)) {
+            return;
+        }
         if (job->error()) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
             return;
         }
         const QString newId = create->responseObject().value(QLatin1String("id")).toString();
@@ -1057,9 +1455,9 @@ void GraphResource::movePimItem(const Item::List &items,
         del->setMethod(GraphRequest::Method::Delete);
         del->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(source.remoteId(), item.remoteId())
                             : QStringLiteral("/me/events/%1").arg(item.remoteId()));
-        connect(del, &KJob::result, this, [this, del, items, index, moved, source, destination, item, newId](KJob *dj) {
+        connect(del, &KJob::result, this, [this, del, items, index, moved, source, destination, item, newId, replay](KJob *dj) {
             if (dj->error() && del->httpStatus() != 404) {
-                cancelTask(dj->errorText());
+                failChange(replay, dj->errorText());
                 return;
             }
             Item movedItem(item);
@@ -1067,17 +1465,17 @@ void GraphResource::movePimItem(const Item::List &items,
                 movedItem.setRemoteId(newId);
             }
             moved->append(movedItem);
-            movePimItem(items, index + 1, moved, source, destination);
+            movePimItem(items, index + 1, moved, source, destination, replay);
         });
         del->start();
     });
     create->start();
 }
 
-void GraphResource::putContactPhotoThenCommit(const Akonadi::Item &item)
+void GraphResource::putContactPhotoThenCommit(const Akonadi::Item &item, const Replay &replay)
 {
     if (item.mimeType() != GraphContactHandler::mimeType() || !item.hasPayload<KContacts::Addressee>() || item.remoteId().isEmpty()) {
-        changeCommitted(item);
+        commitItem(replay, item);
         return;
     }
     const KContacts::Picture photo = item.payload<KContacts::Addressee>().photo();
@@ -1092,25 +1490,25 @@ void GraphResource::putContactPhotoThenCommit(const Akonadi::Item &item)
     }
     if (data.isEmpty()) {
         // No local photo. Deliberately do not delete a server-side one.
-        changeCommitted(item);
+        commitItem(replay, item);
         return;
     }
     auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Method::Put);
     req->setPath(QStringLiteral("/me/contacts/%1/photo/$value").arg(item.remoteId()));
     req->setRawBody(data, contentType);
-    connect(req, &KJob::result, this, [this, item](KJob *job) {
+    connect(req, &KJob::result, this, [this, item, replay](KJob *job) {
         if (job->error()) {
             // Best effort: the contact itself is saved; a failed photo upload
             // should not fail the change replay.
             qCWarning(GRAPH_LOG) << "contact photo upload failed for" << item.remoteId() << ":" << job->errorText();
         }
-        changeCommitted(item);
+        commitItem(replay, item);
     });
     req->start();
 }
 
-void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &messageId)
+void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &messageId, const Replay &replay)
 {
     // Find Graph's auto-filed copy in Sent Items by its Internet Message-ID.
     // OData string literals escape a single quote by doubling it.
@@ -1119,20 +1517,23 @@ void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &
     const QString filter = QStringLiteral("internetMessageId eq '%1'").arg(escapedId);
     auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/mailFolders/sentitems/messages?$select=id&$top=1&$filter=%1").arg(QString::fromUtf8(QUrl::toPercentEncoding(filter))));
-    connect(req, &KJob::result, this, [this, item, req](KJob *job) {
+    connect(req, &KJob::result, this, [this, item, req, replay](KJob *job) {
+        if (retryLater(job, replay, true, false)) {
+            return;
+        }
         if (job->error()) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
             return;
         }
         const auto values = req->aggregatedValue();
         if (!values.isEmpty()) {
             Item newItem(item);
             newItem.setRemoteId(values.first().toObject().value(QLatin1String("id")).toString());
-            changeCommitted(newItem); // adopt the server copy; no duplicate created
+            commitItem(replay, newItem); // adopt the server copy; no duplicate created
         } else {
             // Auto-copy not visible yet — drop the local duplicate; the next delta
             // sync will bring the server's copy with its real id.
-            changeProcessed();
+            skipChange(replay);
         }
     });
     req->start();
@@ -1141,17 +1542,21 @@ void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &
 void GraphResource::itemsMoved(const Item::List &items, const Collection &source, const Collection &destination)
 {
     qCDebug(GRAPH_LOG) << "replay: moving" << items.size() << "items from" << source.name() << "to" << destination.name();
+    Replay replay;
+    if (!startReplay(changeId(items), replay)) {
+        return;
+    }
     const QString mime = items.isEmpty() ? QString() : items.constFirst().mimeType();
     if (mime == GraphEventHandler::mimeType() || mime == GraphTodoHandler::mimeType()) {
         // Graph has no move API for events or tasks — recreate in the destination and
         // delete the original (Outlook on the web does the same). Attendees are not
         // part of the write mapping, so recreating never sends out invitations.
-        movePimItem(items, 0, std::make_shared<Item::List>(), source, destination);
+        movePimItem(items, 0, std::make_shared<Item::List>(), source, destination, replay);
         return;
     }
     if (mime == GraphContactHandler::mimeType()) {
         // Only the default contacts folder is modelled, so this should be unreachable.
-        cancelTask(i18n("Moving contacts between folders is not supported"));
+        failChange(replay, i18n("Moving contacts between folders is not supported"));
         return;
     }
 
@@ -1166,7 +1571,13 @@ void GraphResource::itemsMoved(const Item::List &items, const Collection &source
     // A message that no longer exists cannot be moved; treat it like any other
     // failed item below rather than failing the other moves too.
     job->setIgnoreNotFound(true);
-    connect(job, &KJob::result, this, [this, items, source, job](KJob *kjob) {
+    announceReplay(job, items.size());
+    connect(job, &KJob::result, this, [this, items, source, job, replay](KJob *kjob) {
+        // A move is not repeatable (the old id is gone once it went through), so this
+        // only holds back a change of which no message has been moved yet.
+        if (retryLater(kjob, replay, false, false)) {
+            return;
+        }
         // Graph assigns a new message id on move — push the new remote ids back for
         // every move that went through, even when others failed: with the old id
         // left in place, the next delta of the destination folder would not
@@ -1190,7 +1601,7 @@ void GraphResource::itemsMoved(const Item::List &items, const Collection &source
         }
         qCDebug(GRAPH_LOG) << "replay: moved" << moved.size() << "of" << items.size() << "messages on the server";
         if (failed.isEmpty()) {
-            changesCommitted(moved);
+            commitItems(replay, moved);
             return;
         }
         // The rest is still in the source folder on the server (or, after a tolerated
@@ -1200,14 +1611,15 @@ void GraphResource::itemsMoved(const Item::List &items, const Collection &source
         // poll. The resource's own session is not recorded for replay, so this does
         // not come back as another move.
         auto undo = new ItemMoveJob(failed, source, this);
-        connect(undo, &KJob::result, this, [this, moved, failed](KJob *undoJob) {
+        trackWork(undo);
+        connect(undo, &KJob::result, this, [this, moved, failed, replay](KJob *undoJob) {
             if (undoJob->error()) {
                 qCWarning(GRAPH_LOG) << "could not move" << failed.size() << "unmoved items back locally:" << undoJob->errorText();
             }
             if (moved.isEmpty()) {
-                changeProcessed();
+                skipChange(replay);
             } else {
-                changesCommitted(moved);
+                commitItems(replay, moved);
             }
         });
         undo->start();
@@ -1217,7 +1629,13 @@ void GraphResource::itemsMoved(const Item::List &items, const Collection &source
 
 void GraphResource::itemsRemoved(const Item::List &items)
 {
+    // ResourceBase only passes on items with a remoteId; one that never got to the
+    // server has nothing to delete there.
     qCDebug(GRAPH_LOG) << "replay: removing" << items.size() << "items";
+    Replay replay;
+    if (!startReplay(changeId(items), replay)) {
+        return;
+    }
     // Calendar/contact/task deletes hit different endpoints (and never carry mail flags).
     const QString mime = items.isEmpty() ? QString() : items.constFirst().mimeType();
     QString pimBase;
@@ -1237,11 +1655,15 @@ void GraphResource::itemsRemoved(const Item::List &items)
         }
         auto job = new GraphBatchJob(mClient, calls, this);
         job->setIgnoreNotFound(true);
-        connect(job, &KJob::result, this, [this](KJob *j) {
+        announceReplay(job, items.size());
+        connect(job, &KJob::result, this, [this, replay](KJob *j) {
+            if (retryLater(j, replay, true, false)) {
+                return;
+            }
             if (j->error()) {
-                cancelTask(j->errorText());
+                failChange(replay, j->errorText());
             } else {
-                changeProcessed();
+                skipChange(replay);
             }
         });
         job->start();
@@ -1256,12 +1678,16 @@ void GraphResource::itemsRemoved(const Item::List &items)
     }
     auto job = new GraphBatchJob(mClient, calls, this);
     job->setIgnoreNotFound(true);
-    connect(job, &KJob::result, this, [this, count = items.size()](KJob *job) {
+    announceReplay(job, items.size());
+    connect(job, &KJob::result, this, [this, count = items.size(), replay](KJob *job) {
+        if (retryLater(job, replay, true, false)) {
+            return;
+        }
         if (job->error()) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
         } else {
             qCDebug(GRAPH_LOG) << "replay: deleted" << count << "messages on the server";
-            changeProcessed();
+            skipChange(replay);
         }
     });
     job->start();
@@ -1270,6 +1696,10 @@ void GraphResource::itemsRemoved(const Item::List &items)
 void GraphResource::collectionAdded(const Collection &collection, const Collection &parent)
 {
     qCDebug(GRAPH_LOG) << "replay: collection added" << collection.name() << "under" << parent.name();
+    Replay replay;
+    if (!startReplay(-collection.id(), replay)) {
+        return;
+    }
     QString path;
     QJsonObject body;
     switch (collectionKind(collection)) {
@@ -1298,14 +1728,17 @@ void GraphResource::collectionAdded(const Collection &collection, const Collecti
     req->setMethod(GraphRequest::Method::Post);
     req->setPath(path);
     req->setBody(body);
-    connect(req, &KJob::result, this, [this, collection, req](KJob *job) {
+    connect(req, &KJob::result, this, [this, collection, req, replay](KJob *job) {
+        if (retryLater(job, replay, false, false)) {
+            return;
+        }
         if (job->error()) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
             return;
         }
         Collection col(collection);
         col.setRemoteId(req->responseObject().value(QLatin1String("id")).toString());
-        changeCommitted(col);
+        commitCollection(replay, col);
     });
     req->start();
 }
@@ -1313,6 +1746,10 @@ void GraphResource::collectionAdded(const Collection &collection, const Collecti
 void GraphResource::collectionChanged(const Collection &collection, const QSet<QByteArray> &changedAttributes)
 {
     qCDebug(GRAPH_LOG) << "replay: collection changed" << collection.name() << changedAttributes;
+    Replay replay;
+    if (!startReplay(-collection.id(), replay)) {
+        return;
+    }
     if (!changedAttributes.contains("NAME")) {
         changeProcessed(); // only renames are propagated to Graph
         return;
@@ -1340,11 +1777,14 @@ void GraphResource::collectionChanged(const Collection &collection, const QSet<Q
     req->setMethod(GraphRequest::Method::Patch);
     req->setPath(path);
     req->setBody(body);
-    connect(req, &KJob::result, this, [this, collection](KJob *job) {
+    connect(req, &KJob::result, this, [this, collection, replay](KJob *job) {
+        if (retryLater(job, replay, true, false)) {
+            return;
+        }
         if (job->error()) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
         } else {
-            changeCommitted(collection);
+            commitCollection(replay, collection);
         }
     });
     req->start();
@@ -1353,6 +1793,10 @@ void GraphResource::collectionChanged(const Collection &collection, const QSet<Q
 void GraphResource::collectionMoved(const Collection &collection, [[maybe_unused]] const Collection &source, const Collection &destination)
 {
     qCDebug(GRAPH_LOG) << "replay: collection moved" << collection.name() << "to" << destination.name();
+    Replay replay;
+    if (!startReplay(-collection.id(), replay)) {
+        return;
+    }
     if (collectionKind(collection) != CollectionKind::Mail) {
         // Graph calendars/task lists are flat; the next tree sync re-parents the
         // collection under the account root again.
@@ -1366,9 +1810,12 @@ void GraphResource::collectionMoved(const Collection &collection, [[maybe_unused
     req->setMethod(GraphRequest::Method::Post);
     req->setPath(QStringLiteral("/me/mailFolders/%1/move").arg(collection.remoteId()));
     req->setBody(body);
-    connect(req, &KJob::result, this, [this, collection, req](KJob *job) {
+    connect(req, &KJob::result, this, [this, collection, req, replay](KJob *job) {
+        if (retryLater(job, replay, false, false)) {
+            return;
+        }
         if (job->error()) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
             return;
         }
         Collection col(collection);
@@ -1376,7 +1823,7 @@ void GraphResource::collectionMoved(const Collection &collection, [[maybe_unused
         if (!newId.isEmpty()) {
             col.setRemoteId(newId);
         }
-        changeCommitted(col);
+        commitCollection(replay, col);
     });
     req->start();
 }
@@ -1384,6 +1831,10 @@ void GraphResource::collectionMoved(const Collection &collection, [[maybe_unused
 void GraphResource::collectionRemoved(const Collection &collection)
 {
     qCDebug(GRAPH_LOG) << "replay: collection removed" << collection.name();
+    Replay replay;
+    if (!startReplay(-collection.id(), replay)) {
+        return;
+    }
     QString path;
     switch (collectionKind(collection)) {
     case CollectionKind::Calendar:
@@ -1402,11 +1853,14 @@ void GraphResource::collectionRemoved(const Collection &collection)
     auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Method::Delete);
     req->setPath(path);
-    connect(req, &KJob::result, this, [this, req](KJob *job) {
+    connect(req, &KJob::result, this, [this, req, replay](KJob *job) {
+        if (req->httpStatus() != 404 && retryLater(job, replay, true, false)) {
+            return;
+        }
         if (job->error() && req->httpStatus() != 404) {
-            cancelTask(job->errorText());
+            failChange(replay, job->errorText());
         } else {
-            changeProcessed();
+            skipChange(replay);
         }
     });
     req->start();

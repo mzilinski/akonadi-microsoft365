@@ -16,6 +16,9 @@
 #include <QNetworkRequest>
 #include <QTimer>
 
+#include <algorithm>
+#include <chrono>
+
 static constexpr int MaxRetries = 5;
 
 GraphRequest::GraphRequest(GraphClient &client, QObject *parent)
@@ -63,6 +66,11 @@ void GraphRequest::setRawBody(const QByteArray &body, const QByteArray &contentT
 
 void GraphRequest::start()
 {
+    // Counted until the result is out (KJob also emits finished() when killed or
+    // deleted early), including throttling waits between attempts.
+    connect(this, &KJob::finished, this, [done = mClient.beginWork()] {
+        done();
+    });
     // Requests can be scheduled before the OAuth handshake has produced a token —
     // e.g. a sync or send triggered while the interactive login is still open.
     if (!mClient.auth()) {
@@ -81,6 +89,10 @@ void GraphRequest::start()
 void GraphRequest::issue(const QUrl &url)
 {
     QNetworkRequest req(url);
+    // Without it a request on a connection that silently died (NAT timeout, roaming)
+    // never finishes, and the change replay waits behind it. The timeout counts idle
+    // time, so a large but progressing transfer is not cut off.
+    req.setTransferTimeout(mClient.transferTimeout());
     req.setRawHeader("Authorization", "Bearer " + mClient.auth()->accessToken().toUtf8());
     if (!mContentType.isEmpty()) {
         req.setHeader(QNetworkRequest::ContentTypeHeader, mContentType);
@@ -124,6 +136,13 @@ void GraphRequest::issue(const QUrl &url)
         reply = nam->sendCustomRequest(req, "PATCH", mBody);
         break;
     }
+    // Whether the request got out decides what a failure means (see failure()).
+    // HTTP/1 reports it once headers and body are on the socket, HTTP/2 once the stream
+    // is opened, which errs on the safe side.
+    mRequestSent = false;
+    connect(reply, &QNetworkReply::requestSent, this, [this] {
+        mRequestSent = true;
+    });
     connect(reply, &QNetworkReply::finished, this, &GraphRequest::onReplyFinished);
 }
 
@@ -138,8 +157,7 @@ void GraphRequest::onReplyFinished()
 
     // --- 429 / 503 throttling: honour Retry-After and re-issue -----------------
     if ((http == 429 || http == 503) && mRetryCount < MaxRetries) {
-        const int retryAfter = reply->rawHeader("Retry-After").toInt();
-        scheduleRetry(retryAfter > 0 ? retryAfter : (1 << mRetryCount), reply->url());
+        scheduleRetry(retryDelaySeconds(reply->rawHeader("Retry-After").toInt(), mRetryCount), reply->url());
         ++mRetryCount;
         return;
     }
@@ -203,6 +221,12 @@ QString GraphRequest::formatError(const QJsonObject &graphError, int httpStatus)
                  graphError.value(QLatin1String("code")).toString());
 }
 
+int GraphRequest::retryDelaySeconds(int retryAfter, int attempt)
+{
+    constexpr int maxSeconds = 300;
+    return retryAfter > 0 ? std::min(retryAfter, maxSeconds) : std::min(1 << std::min(attempt, 8), maxSeconds);
+}
+
 GraphRequest::Failure GraphRequest::failureForStatus(int httpStatus)
 {
     if (httpStatus >= 200 && httpStatus < 300) {
@@ -210,9 +234,9 @@ GraphRequest::Failure GraphRequest::failureForStatus(int httpStatus)
     }
     switch (httpStatus) {
     case 401: // token missing, expired or revoked: checked before the work
-    case 408: // the server gave up waiting for the request
-    case 429: // throttled before being processed
-    case 503: // service not taking requests
+    case 408: // the request did not arrive in full in time (RFC 9110)
+    case 429: // throttled: "the requests fail" (Graph throttling guidance)
+    case 503: // unavailable or overloaded; Microsoft's own SDKs repeat even POSTs on it
         return Failure::NotExecuted;
     case 500:
     case 502:
@@ -231,18 +255,25 @@ GraphRequest::Failure GraphRequest::failure() const
     if (mNotAuthenticated) {
         return Failure::NotExecuted;
     }
-    if (mHttpStatus != 0) {
+    if (mHttpStatus >= 300) {
         return failureForStatus(mHttpStatus);
     }
-    // No HTTP answer at all. Only errors that occur before the request can have
-    // reached the server are certain; a timeout or a dropped connection may hit
-    // after Graph already did the work.
-    switch (static_cast<QNetworkReply::NetworkError>(mNetworkError)) {
+    if (mHttpStatus != 0) {
+        // A success status whose body did not arrive: the server has acted.
+        return Failure::Uncertain;
+    }
+    // No HTTP answer at all. A request that never left in full (the connection was not
+    // even up, say, when the transfer timed out) cannot have been acted on.
+    if (!mRequestSent) {
+        return Failure::NotExecuted;
+    }
+    // Otherwise only errors that occur before the request can have reached the server
+    // are certain; a timeout or a dropped connection may hit after Graph already did
+    // the work.
+    switch (mNetworkError) {
     case QNetworkReply::ConnectionRefusedError:
     case QNetworkReply::HostNotFoundError:
     case QNetworkReply::SslHandshakeFailedError:
-    case QNetworkReply::TemporaryNetworkFailureError:
-    case QNetworkReply::NetworkSessionFailedError:
     case QNetworkReply::ProxyConnectionRefusedError:
     case QNetworkReply::ProxyNotFoundError:
         return Failure::NotExecuted;

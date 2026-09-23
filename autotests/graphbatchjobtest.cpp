@@ -19,7 +19,9 @@
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
+
 #include <QTest>
+#include <memory>
 
 /// Answers each /$batch sub-request with the next status code from the list it was
 /// given (200 once the list is used up).
@@ -121,6 +123,64 @@ private:
     int mServed = 0;
     int mBatches = 0;
     bool mThrottleLast = false;
+};
+
+// Answers every connection with a fixed raw response, then closes it.
+class RawServer : public QTcpServer
+{
+public:
+    explicit RawServer(const QByteArray &response)
+        : mResponse(response)
+    {
+        listen(QHostAddress::LocalHost);
+    }
+    [[nodiscard]] QString baseUrl() const
+    {
+        return QStringLiteral("http://127.0.0.1:%1").arg(serverPort());
+    }
+
+protected:
+    void incomingConnection(qintptr handle) override
+    {
+        auto socket = new QTcpSocket(this);
+        socket->setSocketDescriptor(handle);
+        connect(socket, &QTcpSocket::readyRead, socket, [this, socket] {
+            // The whole request has arrived once the headers end (no body in these tests
+            // matters); answer and hang up.
+            if (socket->readAll().contains("\r\n\r\n")) {
+                socket->write(mResponse);
+                socket->flush();
+                socket->disconnectFromHost();
+            }
+        });
+    }
+
+private:
+    QByteArray mResponse;
+};
+
+// Takes every connection and reads what arrives, but never answers.
+class SilentServer : public QTcpServer
+{
+public:
+    SilentServer()
+    {
+        listen(QHostAddress::LocalHost);
+    }
+    [[nodiscard]] QString baseUrl() const
+    {
+        return QStringLiteral("http://127.0.0.1:%1").arg(serverPort());
+    }
+
+protected:
+    void incomingConnection(qintptr handle) override
+    {
+        auto socket = new QTcpSocket(this);
+        socket->setSocketDescriptor(handle);
+        connect(socket, &QTcpSocket::readyRead, socket, [socket] {
+            socket->readAll();
+        });
+    }
 };
 
 class GraphBatchJobTest : public QObject
@@ -279,6 +339,94 @@ private Q_SLOTS:
         QFETCH(int, status);
         QFETCH(GraphRequest::Failure, failure);
         QCOMPARE(GraphRequest::failureForStatus(status), failure);
+    }
+
+    void shouldTreatACutOffSuccessAsUncertain()
+    {
+        // The status line says 201, then the connection drops mid-body: the server has
+        // acted, so this must not count as "nothing happened" (nor as success).
+        RawServer server("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"id\":");
+        GraphOAuth auth(QStringLiteral("tenant"), QStringLiteral("client"), QStringLiteral("wallet"));
+        GraphClient client;
+        client.setAuth(&auth);
+        client.setBaseUrl(server.baseUrl());
+        auto req = new GraphRequest(client, this);
+        req->setMethod(GraphRequest::Method::Post);
+        req->setPath(QStringLiteral("/me/events"));
+        req->setBody(QJsonObject{{QStringLiteral("subject"), QStringLiteral("x")}});
+        QSignalSpy spy(req, &KJob::result);
+        req->start();
+        QVERIFY(spy.wait(30000));
+        QVERIFY(req->error() != 0);
+        QCOMPARE(req->httpStatus(), 201);
+        QCOMPARE(req->failure(), GraphRequest::Failure::Uncertain);
+    }
+
+    void shouldTellAnUnsentTimeoutFromASentOne()
+    {
+        const auto post = [this](const QString &baseUrl) {
+            auto auth = new GraphOAuth(QStringLiteral("tenant"), QStringLiteral("client"), QStringLiteral("wallet"), this);
+            auto client = std::make_shared<GraphClient>();
+            client->setAuth(auth);
+            client->setBaseUrl(baseUrl);
+            client->setTransferTimeout(std::chrono::seconds(1));
+            auto req = new GraphRequest(*client, this);
+            req->setMethod(GraphRequest::Method::Post);
+            req->setPath(QStringLiteral("/me/events"));
+            req->setBody(QJsonObject{{QStringLiteral("subject"), QStringLiteral("x")}});
+            QSignalSpy spy(req, &KJob::result);
+            req->start();
+            spy.wait(30000);
+            return std::make_pair(req, client);
+        };
+
+        // The connection never comes up (no answer from a documentation address): the
+        // body never left, so the server cannot have created anything.
+        const auto unreachable = post(QStringLiteral("http://192.0.2.1:9"));
+        QVERIFY(unreachable.first->error() != 0);
+        QCOMPARE(unreachable.first->failure(), GraphRequest::Failure::NotExecuted);
+
+        // The server took the request and went silent: it may have acted.
+        SilentServer server;
+        const auto silent = post(server.baseUrl());
+        QVERIFY(silent.first->error() != 0);
+        QCOMPARE(silent.first->failure(), GraphRequest::Failure::Uncertain);
+    }
+
+    void shouldTrackWorkInFlight()
+    {
+        FakeGraphServer server({});
+        LiveClient live(server);
+        int idle = 0;
+        live.client.setIdleCallback([&idle] {
+            ++idle;
+        });
+        auto job = new GraphBatchJob(live.client, deleteCalls(25), this);
+        QSignalSpy spy(job, &KJob::result);
+        job->start();
+        QVERIFY(live.client.isBusy());
+        QVERIFY(spy.wait(30000));
+        QVERIFY(!live.client.isBusy());
+        // Once for the whole batch, not for each of its round trips.
+        QCOMPARE(idle, 1);
+    }
+
+    void shouldOutliveItsClient()
+    {
+        // On shutdown, jobs can end after the client they ran on is gone.
+        auto client = std::make_unique<GraphClient>();
+        int idle = 0;
+        client->setIdleCallback([&idle] {
+            ++idle;
+        });
+        auto job = new GraphBatchJob(*client, deleteCalls(2), this);
+        QSignalSpy spy(job, &KJob::result);
+        job->start();
+        QVERIFY(client->isBusy());
+        client.reset();
+        QVERIFY(spy.wait(30000));
+        delete job;
+        QCOMPARE(idle, 1);
     }
 
     void shouldKeepRetryingWhileThrottledCallsProgress()

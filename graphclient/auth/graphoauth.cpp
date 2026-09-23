@@ -12,6 +12,8 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QHostAddress>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
 #include <QOAuth2AuthorizationCodeFlow>
 #include <QOAuthHttpServerReplyHandler>
 #include <QTimer>
@@ -19,7 +21,9 @@
 
 #include <qt6keychain/keychain.h>
 
+#include <chrono>
 #include <limits>
+#include <utility>
 
 // v2.0 endpoints (EWS uses the legacy v1 endpoint with a `resource=` param; Graph uses v2 scopes).
 static QString authorizationUrl(const QString &tenant)
@@ -86,6 +90,23 @@ void GraphOAuth::setUpFlow()
     });
     connect(mFlow.get(), &QAbstractOAuth::granted, this, &GraphOAuth::onGranted);
     connect(mFlow.get(), &QAbstractOAuth::requestFailed, this, &GraphOAuth::onRequestFailed);
+    connect(mFlow.get(), &QAbstractOAuth2::serverReportedErrorOccurred, this, [this](const QString &error) {
+        mServerError = error;
+    });
+    // Qt before 6.12 does not report the OAuth error of a token request, only that it
+    // failed; the HTTP status tells a service outage apart from a dead refresh token.
+    // The flow creates its network access manager only when needed, so give it one;
+    // the manager reports a reply before the flow handles it.
+    auto nam = new QNetworkAccessManager(mFlow.get());
+    mFlow->setNetworkAccessManager(nam);
+    connect(nam, &QNetworkAccessManager::finished, this, [this](QNetworkReply *reply) {
+        if (reply->url().matches(mFlow->tokenUrl(), QUrl::RemoveQuery)) {
+            mTokenHttpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        }
+    });
+    // A token request on a connection that silently died would otherwise keep the
+    // sign-in, and with it the account, waiting for minutes.
+    nam->setTransferTimeout(std::chrono::minutes(1));
 }
 
 void GraphOAuth::authenticate()
@@ -124,6 +145,18 @@ void GraphOAuth::startSilentRefresh(const QString &refreshToken)
 void GraphOAuth::startInteractive()
 {
     mInteractive = true;
+    // Closing the browser tab tells nobody; without a limit the account would wait
+    // for the sign-in until the resource restarts.
+    if (!mInteractiveTimeout) {
+        mInteractiveTimeout = new QTimer(this);
+        mInteractiveTimeout->setSingleShot(true);
+        connect(mInteractiveTimeout, &QTimer::timeout, this, [this] {
+            if (mReplyHandler) {
+                mReplyHandler->close();
+            }
+            Q_EMIT failed(i18n("The sign-in in the web browser was not completed"));
+        });
+    }
 
     if (!mReplyHandler) {
         mReplyHandler = new QOAuthHttpServerReplyHandler(this);
@@ -139,11 +172,19 @@ void GraphOAuth::startInteractive()
         }
     }
     mFlow->setReplyHandler(mReplyHandler);
+    mInteractiveTimeout->start(std::chrono::minutes(10));
     mFlow->grant();
 }
 
 void GraphOAuth::onGranted()
 {
+    // Later renewals are silent refreshes again, whatever got this token.
+    mInteractive = false;
+    mServerError.clear();
+    mTokenHttpStatus = 0;
+    if (mInteractiveTimeout) {
+        mInteractiveTimeout->stop();
+    }
     if (mReplyHandler) {
         mReplyHandler->close();
     }
@@ -155,13 +196,32 @@ void GraphOAuth::onGranted()
     }
 }
 
-void GraphOAuth::onRequestFailed()
+void GraphOAuth::onRequestFailed(QAbstractOAuth::Error error)
 {
+    // Without a network, or while the token service is down, the silent refresh fails
+    // too; the refresh token is fine, and a browser sign-in would not get through either.
+    const int httpStatus = std::exchange(mTokenHttpStatus, 0);
+    const QString serverError = std::exchange(mServerError, QString());
+    const bool serviceDown = error == QAbstractOAuth::Error::ServerError
+        && (httpStatus >= 500 || httpStatus == 429 || serverError == QLatin1String("temporarily_unavailable") || serverError == QLatin1String("server_error"));
+    if (!mInteractive && (error == QAbstractOAuth::Error::NetworkError || serviceDown)) {
+        qCInfo(GRAPHCLIENT_LOG) << "token endpoint not reachable" << httpStatus << serverError;
+        if (mWasReady && mRefreshTimer) {
+            // A background renewal: the current token still works for a while; try
+            // again soon rather than only when it has run out.
+            mRefreshTimer->start(std::chrono::minutes(1));
+        }
+        Q_EMIT unreachable();
+        return;
+    }
     // A dead refresh token (revoked, >90 days idle) fails the silent path — retry
     // interactively once before giving up.
     if (!mInteractive) {
         startInteractive();
         return;
+    }
+    if (mInteractiveTimeout) {
+        mInteractiveTimeout->stop();
     }
     Q_EMIT failed(i18n("OAuth2 request failed"));
 }
@@ -212,6 +272,19 @@ void GraphOAuth::scheduleProactiveRefresh()
         msecs = qMax(minimumDelayMsecs, QDateTime::currentDateTime().msecsTo(mFlow->expirationAt()) - expiryMarginMsecs);
     }
     mRefreshTimer->start(int(qMin<qint64>(msecs, std::numeric_limits<int>::max())));
+}
+
+bool GraphOAuth::hasValidToken() const
+{
+    if (!mEnvToken.isEmpty()) {
+        return true;
+    }
+    if (!mFlow || mFlow->token().isEmpty()) {
+        return false;
+    }
+    // Some margin, so that a request started now does not arrive with an expired token.
+    const QDateTime expiry = mFlow->expirationAt();
+    return !expiry.isValid() || QDateTime::currentDateTime().secsTo(expiry) > 2 * 60;
 }
 
 QString GraphOAuth::accessToken() const

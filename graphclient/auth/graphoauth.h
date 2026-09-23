@@ -12,10 +12,13 @@
         -> missing: interactive browser login (loopback redirect)
       granted -> persist new refresh token, schedule a proactive renewal shortly
                  before the access token expires, emit ready() (first time only).
+      no network -> unreachable(); the refresh token is kept, and no browser opens for
+                 what is only a missing connection.
 */
 
 #pragma once
 
+#include <QAbstractOAuth>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -44,10 +47,17 @@ public:
     /// Current bearer token, or empty if not yet authenticated.
     [[nodiscard]] QString accessToken() const;
 
+    /// Whether accessToken() can still be used for a while. The proactive renewal does
+    /// not run during suspend, so after a resume the token may have expired.
+    [[nodiscard]] bool hasValidToken() const;
+
 Q_SIGNALS:
     /// First successful token acquisition. Later silent renewals do not re-emit.
     void ready();
     void failed(const QString &error);
+    /// The token endpoint could not be reached. Nothing is wrong with the account:
+    /// authenticate() again once the network is back.
+    void unreachable();
 
 private:
     [[nodiscard]] static QSet<QByteArray> graphScopes();
@@ -56,7 +66,7 @@ private:
     void startSilentRefresh(const QString &refreshToken);
     void startInteractive();
     void onGranted();
-    void onRequestFailed();
+    void onRequestFailed(QAbstractOAuth::Error error);
     void persistRefreshToken();
     void scheduleProactiveRefresh();
 
@@ -69,4 +79,7 @@ private:
     std::unique_ptr<QOAuth2AuthorizationCodeFlow> mFlow;
     QOAuthHttpServerReplyHandler *mReplyHandler = nullptr;
     QTimer *mRefreshTimer = nullptr;
+    QTimer *mInteractiveTimeout = nullptr; // a browser sign-in nobody finishes
+    QString mServerError; // OAuth error code of the last failed token request (Qt >= 6.12)
+    int mTokenHttpStatus = 0; // HTTP status of the last token request
 };

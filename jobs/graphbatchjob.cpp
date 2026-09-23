@@ -6,6 +6,7 @@
 #include "graphbatchjob.h"
 
 #include "graph_debug.h"
+#include "graphclient.h"
 
 #include <KLocalizedString>
 #include <QJsonArray>
@@ -51,6 +52,10 @@ void GraphBatchJob::setIgnoreNotFound(bool ignore)
 
 void GraphBatchJob::start()
 {
+    // Registered as one piece of work, also while waiting out throttling between rounds.
+    connect(this, &KJob::finished, this, [done = mClient.beginWork()] {
+        done();
+    });
     mResponses = QList<QJsonObject>(mCalls.size());
     if (mCalls.isEmpty()) {
         // Stay asynchronous like every other exit of this job, so a caller that
@@ -143,7 +148,7 @@ void GraphBatchJob::issueNextBatch()
         if (!throttled.isEmpty()) {
             // Re-issue the throttled ones first, after the delay the server asked for.
             mPending = throttled + mPending;
-            const int seconds = retryAfter > 0 ? retryAfter : (1 << mThrottleRetries.value(throttled.constFirst()));
+            const int seconds = GraphRequest::retryDelaySeconds(retryAfter, mThrottleRetries.value(throttled.constFirst()));
             QTimer::singleShot(seconds * 1000, this, &GraphBatchJob::issueNextBatch);
             return;
         }
