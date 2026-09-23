@@ -32,6 +32,15 @@ public:
     };
     Q_ENUM(Method)
 
+    /// What a failed request means for repeating it.
+    enum class Failure : uint8_t {
+        None, ///< succeeded
+        NotExecuted, ///< the server certainly did not act on it; repeating is always safe
+        Uncertain, ///< it may already have been carried out; repeat only what is harmless twice
+        Permanent, ///< repeating would fail the same way
+    };
+    Q_ENUM(Failure)
+
     GraphRequest(GraphClient &client, QObject *parent = nullptr);
 
     void setMethod(Method m);
@@ -54,12 +63,17 @@ public:
     [[nodiscard]] QString deltaLink() const; // @odata.deltaLink from the final page (if any)
     [[nodiscard]] int httpStatus() const; // HTTP status of the (last) reply
     [[nodiscard]] QString graphErrorCode() const; // "error.code" from a Graph error body
+    [[nodiscard]] Failure failure() const;
+    /// No token, or the server rejected it (HTTP 401).
+    [[nodiscard]] bool authenticationRejected() const;
 
     // Shared with GraphBatchJob, which builds the same requests as /$batch entries.
     /// Whether a request to @p path asks for immutable ids (not in Microsoft To Do).
     [[nodiscard]] static bool usesImmutableIds(const QString &path);
     /// User-visible text for a Graph error body ({"code", "message"}) and HTTP status.
     [[nodiscard]] static QString formatError(const QJsonObject &graphError, int httpStatus);
+    /// Failure class of an HTTP status the server answered with.
+    [[nodiscard]] static Failure failureForStatus(int httpStatus);
 
 private:
     void onReplyFinished();
@@ -81,4 +95,6 @@ private:
     QString mGraphErrorCode;
     int mRetryCount = 0;
     int mHttpStatus = 0;
+    int mNetworkError = 0; // QNetworkReply::NetworkError of the last reply
+    bool mNotAuthenticated = false;
 };

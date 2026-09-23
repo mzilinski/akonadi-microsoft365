@@ -106,7 +106,7 @@ void GraphBatchJob::issueNextBatch()
             // batch was rejected as a whole): nothing further will get through either,
             // so account for every remaining call and stop.
             for (int i = 0; i < indexes.size() + mPending.size(); ++i) {
-                failCall(job->error(), job->errorText());
+                failCall(job->error(), job->errorText(), req->failure(), req->authenticationRejected());
             }
             mPending.clear();
             finish();
@@ -135,9 +135,10 @@ void GraphBatchJob::issueNextBatch()
         }
         for (const int i : indexes) {
             if (!answered.contains(i)) {
-                failCall(KJob::UserDefinedError, i18n("The server did not answer this request"));
+                failCall(KJob::UserDefinedError, i18n("The server did not answer this request"), GraphRequest::Failure::Uncertain, false);
             }
         }
+        setPercent(100 * (mSucceeded + mFailed) / mCalls.size());
 
         if (!throttled.isEmpty()) {
             // Re-issue the throttled ones first, after the delay the server asked for.
@@ -159,20 +160,27 @@ void GraphBatchJob::finishCall(int index, int status, const QJsonObject &body)
 {
     if (status >= 200 && status < 300) {
         mResponses[index] = body;
+        ++mSucceeded;
         return;
     }
     if (mIgnoreNotFound && status == 404) {
         // Expected when the item is already gone on the server; logged so that a
         // systematic cause (such as a wrong id) does not go unnoticed.
         qCInfo(GRAPH_LOG) << "batch: treating 404 as done for" << mCalls.at(index).path;
-        return; // success without a response body
+        ++mSucceeded; // without a response body
+        return;
     }
     const QJsonObject err = body.value(QLatin1String("error")).toObject();
-    failCall(KJob::UserDefinedError, err.isEmpty() ? i18n("HTTP %1", status) : GraphRequest::formatError(err, status));
+    failCall(KJob::UserDefinedError,
+             err.isEmpty() ? i18n("HTTP %1", status) : GraphRequest::formatError(err, status),
+             GraphRequest::failureForStatus(status),
+             status == 401);
 }
 
-void GraphBatchJob::failCall(int error, const QString &errorText)
+void GraphBatchJob::failCall(int error, const QString &errorText, GraphRequest::Failure failure, bool authRejected)
 {
+    ++mFailedBy[failure];
+    mAuthRejected = mAuthRejected || authRejected;
     // Carry on with the remaining calls instead of abandoning them. One Akonadi
     // change notification fans out into one call per item, and a failed replay is
     // not retried: ResourceBase::cancelTask() marks it as processed. Whatever is
@@ -201,6 +209,21 @@ void GraphBatchJob::finish()
 QList<QJsonObject> GraphBatchJob::responses() const
 {
     return mResponses;
+}
+
+int GraphBatchJob::succeeded() const
+{
+    return mSucceeded;
+}
+
+int GraphBatchJob::failed(GraphRequest::Failure failure) const
+{
+    return mFailedBy.value(failure);
+}
+
+bool GraphBatchJob::authenticationRejected() const
+{
+    return mAuthRejected;
 }
 
 #include "moc_graphbatchjob.cpp"

@@ -176,6 +176,10 @@ private Q_SLOTS:
         QCOMPARE(job->responses().size(), 5);
         // Not translated here (no catalog is loaded), so the source string applies.
         QVERIFY(job->errorText().contains(QLatin1String("5 of 5")));
+        // Nothing left the machine: safe to send again, and signing in is what is missing.
+        QCOMPARE(job->failed(GraphRequest::Failure::NotExecuted), 5);
+        QCOMPARE(job->succeeded(), 0);
+        QVERIFY(job->authenticationRejected());
     }
 
     void shouldReportASingleFailureVerbatim()
@@ -232,6 +236,49 @@ private Q_SLOTS:
         QCOMPARE(job->responses().at(0).value(QLatin1String("id")).toString(), QStringLiteral("moved"));
         QVERIFY(job->responses().at(1).isEmpty());
         QCOMPARE(job->responses().at(2).value(QLatin1String("id")).toString(), QStringLiteral("moved"));
+        // A 500 may have done the work anyway: only repeatable changes may go again.
+        QCOMPARE(job->succeeded(), 2);
+        QCOMPARE(job->failed(GraphRequest::Failure::Uncertain), 1);
+        QCOMPARE(job->failed(GraphRequest::Failure::NotExecuted), 0);
+        QCOMPARE(job->percent(), 100UL);
+    }
+
+    void shouldClassifyEveryFailureOfAMixedBatch()
+    {
+        FakeGraphServer server({400, 401, 504, 200});
+        LiveClient live(server);
+        auto job = new GraphBatchJob(live.client, deleteCalls(4), this);
+        QVERIFY(run(job));
+        QCOMPARE(job->succeeded(), 1);
+        QCOMPARE(job->failed(GraphRequest::Failure::Permanent), 1);
+        QCOMPARE(job->failed(GraphRequest::Failure::NotExecuted), 1);
+        QCOMPARE(job->failed(GraphRequest::Failure::Uncertain), 1);
+        QVERIFY(job->authenticationRejected());
+    }
+
+    void shouldClassifyHttpStatuses_data()
+    {
+        QTest::addColumn<int>("status");
+        QTest::addColumn<GraphRequest::Failure>("failure");
+        QTest::newRow("200") << 200 << GraphRequest::Failure::None;
+        QTest::newRow("204") << 204 << GraphRequest::Failure::None;
+        QTest::newRow("401") << 401 << GraphRequest::Failure::NotExecuted;
+        QTest::newRow("408") << 408 << GraphRequest::Failure::NotExecuted;
+        QTest::newRow("429") << 429 << GraphRequest::Failure::NotExecuted;
+        QTest::newRow("503") << 503 << GraphRequest::Failure::NotExecuted;
+        QTest::newRow("500") << 500 << GraphRequest::Failure::Uncertain;
+        QTest::newRow("502") << 502 << GraphRequest::Failure::Uncertain;
+        QTest::newRow("504") << 504 << GraphRequest::Failure::Uncertain;
+        QTest::newRow("400") << 400 << GraphRequest::Failure::Permanent;
+        QTest::newRow("403") << 403 << GraphRequest::Failure::Permanent;
+        QTest::newRow("404") << 404 << GraphRequest::Failure::Permanent;
+    }
+
+    void shouldClassifyHttpStatuses()
+    {
+        QFETCH(int, status);
+        QFETCH(GraphRequest::Failure, failure);
+        QCOMPARE(GraphRequest::failureForStatus(status), failure);
     }
 
     void shouldKeepRetryingWhileThrottledCallsProgress()

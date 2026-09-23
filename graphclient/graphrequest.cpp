@@ -66,6 +66,7 @@ void GraphRequest::start()
     // Requests can be scheduled before the OAuth handshake has produced a token —
     // e.g. a sync or send triggered while the interactive login is still open.
     if (!mClient.auth()) {
+        mNotAuthenticated = true;
         setError(KJob::UserDefinedError);
         setErrorText(i18n("Not authenticated with Microsoft 365 yet"));
         QTimer::singleShot(0, this, [this] {
@@ -133,6 +134,7 @@ void GraphRequest::onReplyFinished()
 
     const int http = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     mHttpStatus = http;
+    mNetworkError = reply->error();
 
     // --- 429 / 503 throttling: honour Retry-After and re-issue -----------------
     if ((http == 429 || http == 503) && mRetryCount < MaxRetries) {
@@ -199,6 +201,59 @@ QString GraphRequest::formatError(const QJsonObject &graphError, int httpStatus)
                  graphError.value(QLatin1String("message")).toString(),
                  httpStatus,
                  graphError.value(QLatin1String("code")).toString());
+}
+
+GraphRequest::Failure GraphRequest::failureForStatus(int httpStatus)
+{
+    if (httpStatus >= 200 && httpStatus < 300) {
+        return Failure::None;
+    }
+    switch (httpStatus) {
+    case 401: // token missing, expired or revoked: checked before the work
+    case 408: // the server gave up waiting for the request
+    case 429: // throttled before being processed
+    case 503: // service not taking requests
+        return Failure::NotExecuted;
+    case 500:
+    case 502:
+    case 504: // may have failed after the work was done, or the answer got lost
+        return Failure::Uncertain;
+    default:
+        return Failure::Permanent;
+    }
+}
+
+GraphRequest::Failure GraphRequest::failure() const
+{
+    if (!error()) {
+        return Failure::None;
+    }
+    if (mNotAuthenticated) {
+        return Failure::NotExecuted;
+    }
+    if (mHttpStatus != 0) {
+        return failureForStatus(mHttpStatus);
+    }
+    // No HTTP answer at all. Only errors that occur before the request can have
+    // reached the server are certain; a timeout or a dropped connection may hit
+    // after Graph already did the work.
+    switch (static_cast<QNetworkReply::NetworkError>(mNetworkError)) {
+    case QNetworkReply::ConnectionRefusedError:
+    case QNetworkReply::HostNotFoundError:
+    case QNetworkReply::SslHandshakeFailedError:
+    case QNetworkReply::TemporaryNetworkFailureError:
+    case QNetworkReply::NetworkSessionFailedError:
+    case QNetworkReply::ProxyConnectionRefusedError:
+    case QNetworkReply::ProxyNotFoundError:
+        return Failure::NotExecuted;
+    default:
+        return Failure::Uncertain;
+    }
+}
+
+bool GraphRequest::authenticationRejected() const
+{
+    return error() && (mNotAuthenticated || mHttpStatus == 401);
 }
 
 QJsonObject GraphRequest::responseObject() const

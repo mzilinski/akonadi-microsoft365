@@ -44,11 +44,17 @@ public:
     /// One entry per call, in order; empty object for responses without a body (204)
     /// and for calls that failed.
     [[nodiscard]] QList<QJsonObject> responses() const;
+    /// Calls the server carried out (including tolerated 404s).
+    [[nodiscard]] int succeeded() const;
+    /// Failed calls of the given class (see GraphRequest::Failure).
+    [[nodiscard]] int failed(GraphRequest::Failure failure) const;
+    /// Some call failed for lack of a valid token.
+    [[nodiscard]] bool authenticationRejected() const;
 
 private:
     void issueNextBatch();
     void finishCall(int index, int status, const QJsonObject &body);
-    void failCall(int error, const QString &errorText);
+    void failCall(int error, const QString &errorText, GraphRequest::Failure failure, bool authRejected);
     void finish();
 
     GraphClient &mClient;
@@ -57,6 +63,9 @@ private:
     QList<int> mPending; // indexes not yet answered, in issue order
     QString mFirstErrorText;
     int mFailed = 0;
+    int mSucceeded = 0;
+    QHash<GraphRequest::Failure, int> mFailedBy;
+    bool mAuthRejected = false;
     int mFirstError = 0;
     QHash<int, int> mThrottleRetries; // per call index
     bool mIgnoreNotFound = false;
