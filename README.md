@@ -125,11 +125,18 @@ Deliberate gaps, roughly in the order users are likely to notice them:
 - **Task checklist items** — subtasks inside a Microsoft To Do task (`checklistItems`)
   are not mapped; iCalendar has no direct equivalent. They are preserved on the server
   when a task is edited from KDE.
-- **"Nth weekday" recurrences** — rules like *every first Monday*
-  (`relativeMonthly`/`relativeYearly`) are read as an approximation (monthly/yearly by
-  date) and never written; deliberately left out rather than written wrongly. Note
-  also that Microsoft To Do normalises counted repetitions (*10 times*) to
-  never-ending server-side; calendar events keep their count.
+- **Recurrence rules without a Graph equivalent** — Graph knows daily, weekly,
+  monthly/yearly by date and *the first/…/last weekday* patterns. Other iCalendar
+  rules (e.g. *every Monday and Tuesday of the first week*, several rules per event)
+  are not written; an edit from KDE then leaves the server's series as it is.
+  Series that KOrganizer's editor cannot show either (*the first weekday*, *day 31*
+  falling back to the last day) cannot be turned into a single event from KDE, as
+  the editor drops their rule on every save.
+- **Changed or cancelled single occurrences of a series** — exceptions are not
+  mapped: KDE shows every occurrence as the series defines it, and detaching one
+  occurrence in KOrganizer creates a separate event on the server.
+  Microsoft To Do also normalises counted repetitions (*10 times*) to never-ending
+  server-side; calendar events keep their count.
 - **Journal entries** (VJOURNAL) — no Graph equivalent, not synced.
 - **Contact birthdays are read-only** — writing them would make Exchange create
   birthday calendar events on its own.

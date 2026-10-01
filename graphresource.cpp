@@ -67,6 +67,10 @@ const SpecialFolder kSpecialFolders[] = {
 constexpr int kMillisecondsPerMinute = 60 * 1000;
 // How soon to try signing in again when Microsoft 365 could not be reached.
 constexpr int kSignInRetrySeconds = 60;
+// Version of the event and task mapping. Raising it re-lists those collections once,
+// so that items cached by an older mapping are rebuilt. 1: event time zones, all
+// recurrence patterns, Windows zone names on tasks.
+constexpr int kPimMappingVersion = 1;
 
 // Graph uses a different endpoint family per collection type; mail is the default.
 enum class CollectionKind {
@@ -1017,9 +1021,6 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unus
                 } else {
                     req->setPath(QStringLiteral("/me/contacts/%1").arg(item.remoteId()));
                 }
-                if (isEvent) {
-                    req->addHeader("Prefer", "outlook.timezone=\"UTC\"");
-                }
                 connect(req, &KJob::result, this, [this, item, req, isEvent, isTodo, pending, remaining, generation](KJob *j) {
                     if (!j->error()) {
                         Item filled(item);
@@ -1172,10 +1173,26 @@ void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partId
     } else if (mime == GraphTodoHandler::mimeType() && item.hasPayload<KCalendarCore::Incidence::Ptr>()) {
         auto todo = item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>();
         if (todo) {
-            patchPimItem(item,
-                         QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(item.parentCollection().remoteId(), item.remoteId()),
-                         GraphTodoHandler::toJson(todo),
-                         replay);
+            const QString readModified = GraphTodoHandler::serverModified(todo);
+            const auto written = mWrittenDue.constFind(item.id());
+            if (written != mWrittenDue.cend() && !readModified.isEmpty() && written->first == readModified) {
+                // No sync since an earlier change wrote a due date: that is the server's now.
+                todo = KCalendarCore::Todo::Ptr(todo->clone());
+                GraphTodoHandler::setServerDue(todo, written->second);
+            } else if (written != mWrittenDue.cend()) {
+                mWrittenDue.erase(written); // a sync brought the task back since
+            }
+            const QJsonObject body = GraphTodoHandler::toJson(todo);
+            const QString sentDue = body.value(QLatin1String("dueDateTime")).toObject().value(QLatin1String("dateTime")).toString().left(10);
+            Patch patch;
+            // Sent twice, To Do would move a recurring task on twice.
+            patch.repeatable = sentDue.isEmpty() || !todo->recurs();
+            patch.onSuccess = [this, id = item.id(), readModified, sentDue] {
+                if (!sentDue.isEmpty()) {
+                    mWrittenDue.insert(id, {readModified, sentDue});
+                }
+            };
+            patchPimItem(item, QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(item.parentCollection().remoteId(), item.remoteId()), body, replay, patch);
             return;
         }
     }
@@ -1281,17 +1298,25 @@ void GraphResource::createMimeMessage(const QByteArray &rawMime,
 
 void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body, const Replay &replay)
 {
+    patchPimItem(item, path, body, replay, Patch());
+}
+
+void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body, const Replay &replay, const Patch &patch)
+{
     auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Method::Patch);
     req->setPath(path);
     req->setBody(body);
-    connect(req, &KJob::result, this, [this, item, replay](KJob *job) {
-        if (retryLater(job, replay, true, false)) {
+    connect(req, &KJob::result, this, [this, item, replay, patch](KJob *job) {
+        if (retryLater(job, replay, patch.repeatable, false)) {
             return;
         }
         if (job->error()) {
             failChange(replay, job->errorText());
         } else {
+            if (patch.onSuccess) {
+                patch.onSuccess();
+            }
             putContactPhotoThenCommit(item, replay);
         }
     });
@@ -1340,7 +1365,7 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
             todo = item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>();
         }
         if (todo) {
-            postPimItem(item, QStringLiteral("/me/todo/lists/%1/tasks").arg(collection.remoteId()), GraphTodoHandler::toJson(todo), false, replay);
+            postPimItem(item, QStringLiteral("/me/todo/lists/%1/tasks").arg(collection.remoteId()), GraphTodoHandler::toJsonForCreate(todo), false, replay);
         } else {
             qCWarning(GRAPH_LOG) << "todo itemAdded without usable payload";
             changeProcessed();
@@ -1424,7 +1449,7 @@ void GraphResource::movePimItem(const Item::List &items,
             failChange(replay, i18n("Cannot move task %1: no payload", item.remoteId()));
             return;
         }
-        body = GraphTodoHandler::toJson(todo);
+        body = GraphTodoHandler::toJsonForCreate(todo);
     } else {
         const auto event =
             item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Event>() : nullptr;
@@ -1922,15 +1947,28 @@ void GraphResource::clearFolderSyncState()
 }
 
 // ----- delta-link (sync state) helpers -----
+int GraphResource::mappingVersion(const Collection &col)
+{
+    const QStringList mimes = col.contentMimeTypes();
+    return mimes.contains(GraphEventHandler::mimeType()) || mimes.contains(GraphTodoHandler::mimeType()) ? kPimMappingVersion : 0;
+}
+
 QString GraphResource::collectionDeltaLink(const Collection &col)
 {
     const auto *attr = col.attribute<GraphSyncStateAttribute>();
-    return attr ? attr->deltaLink() : QString();
+    if (!attr) {
+        return {};
+    }
+    if (attr->version() < mappingVersion(col)) {
+        qCDebug(GRAPH_LOG) << "re-listing" << col.name() << "for the updated item mapping";
+        return {};
+    }
+    return attr->deltaLink();
 }
 
 void GraphResource::saveCollectionDeltaLink(Collection col, const QString &deltaLink)
 {
-    col.addAttribute(new GraphSyncStateAttribute(deltaLink));
+    col.addAttribute(new GraphSyncStateAttribute(deltaLink, mappingVersion(col)));
     auto job = new CollectionModifyJob(col, this);
     job->start();
 }

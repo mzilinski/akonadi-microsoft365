@@ -41,7 +41,8 @@ void GraphFetchPimItemsJob::start()
         // fields we map. The returned deltaLink preserves this selection.
         startDelta(QStringLiteral("/me/calendars/%1/events/delta"
                                   "?$select=id,iCalUId,subject,body,bodyPreview,isAllDay,start,end,location,"
-                                  "organizer,attendees,categories,showAs,sensitivity,recurrence")
+                                  "organizer,attendees,categories,showAs,sensitivity,recurrence,"
+                                  "originalStartTimeZone,originalEndTimeZone")
                        .arg(mCollection.remoteId()),
                    false);
         break;

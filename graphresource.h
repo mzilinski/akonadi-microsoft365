@@ -208,6 +208,14 @@ private:
     void postPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body, bool repeatable, const Replay &replay);
     // Contact photos live on a separate endpoint; upload after the JSON write, then commit.
     void putContactPhotoThenCommit(const Akonadi::Item &item, const Replay &replay);
+    // An update. repeatable: it may be sent again after an uncertain failure (not so the
+    // due date of a recurring task, see GraphTodoHandler::serverDue()). onSuccess runs
+    // once the server took it, before the change is committed.
+    struct Patch {
+        bool repeatable = true;
+        std::function<void()> onSuccess;
+    };
+    void patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body, const Replay &replay, const Patch &patch);
     void patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body, const Replay &replay);
     // Graph has no move API for events/tasks: recreate in the destination, delete the
     // original, then continue with the next item (sequential; commits when done).
@@ -219,7 +227,9 @@ private:
                      const Replay &replay);
 
     // Per-collection delta state (the @odata.deltaLink) is stored as a collection
-    // attribute, exactly like EwsSyncStateAttribute.
+    // attribute, exactly like EwsSyncStateAttribute, tagged with the mapping version
+    // its items were built with.
+    [[nodiscard]] static int mappingVersion(const Akonadi::Collection &col);
     [[nodiscard]] static QString collectionDeltaLink(const Akonadi::Collection &col);
     void saveCollectionDeltaLink(Akonadi::Collection col, const QString &deltaLink);
 
@@ -241,6 +251,11 @@ private:
     bool mAuthPending = false; // an OAuth flow is running
     quint64 mTaskGeneration = 0; // bumped whenever the scheduler gives up the running task
     QHash<qint64, std::function<void()>> mLateOutcomes; // change -> outcome of a given-up run
+    // Due dates this resource wrote, per task: the server's modification time as read,
+    // and the due date written since. Until a sync delivers the task again (with a new
+    // modification time), the written one is what the server has
+    // (see GraphTodoHandler::serverDue()).
+    QHash<Akonadi::Item::Id, std::pair<QString, QString>> mWrittenDue;
     bool mResumeWhenIdle = false; // resume the scheduler once the client is idle
     bool mReauthenticate = false; // the server rejected the token; get a new one when back online
 };

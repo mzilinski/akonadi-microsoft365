@@ -16,27 +16,36 @@ using namespace KCalendarCore;
 
 namespace
 {
-// Graph dateTimeTimeZone -> QDateTime. Unlike the calendar API, To Do ignores the
-// Prefer: outlook.timezone header: the timestamp is naive and the zone is a separate
-// field. Graph also uses 7 fractional digits, which QDateTime cannot parse.
-QDateTime parseTaskDateTime(const QJsonObject &dtz)
+// Marks the due date read from the server (X-KDE-GRAPH-SERVER-DUE), see toJson().
+constexpr QByteArrayView kCustomApp("GRAPH");
+constexpr QByteArrayView kServerDue("SERVER-DUE");
+// The server's lastModifiedDateTime as read (X-KDE-GRAPH-SERVER-MODIFIED): tells whether
+// a sync has delivered the task since a given moment.
+constexpr QByteArrayView kServerModified("SERVER-MODIFIED");
+
+// To Do keeps start and due as dates: it drops the time and takes the date in the zone
+// sent along. Its own clients write the user's local midnight, which Graph hands out
+// in UTC (the 5th in Berlin as 22:00 on the 4th). Taken back to the local zone that is
+// midnight again — rounded to the nearest one, in case the client was in a zone up
+// to twelve hours away. A named zone carries the date itself.
+QDate taskDate(const QJsonObject &dtz)
 {
-    QString raw = dtz.value(QLatin1String("dateTime")).toString();
-    if (raw.isEmpty()) {
-        return {};
-    }
-    const int dot = raw.indexOf(QLatin1Char('.'));
-    if (dot >= 0) {
-        raw = raw.left(dot);
-    }
-    QDateTime dt = QDateTime::fromString(raw, QStringLiteral("yyyy-MM-ddTHH:mm:ss"));
+    const QDateTime dt = GraphEventHandler::parseDateTimeTimeZone(dtz);
     if (!dt.isValid()) {
         return {};
     }
     const QString tz = dtz.value(QLatin1String("timeZone")).toString();
-    const QTimeZone zone = tz.isEmpty() ? QTimeZone::utc() : QTimeZone(tz.toUtf8());
-    dt.setTimeZone(zone.isValid() ? zone : QTimeZone::utc());
-    return dt;
+    if (GraphEventHandler::timeZoneFromGraph(tz.isEmpty() ? QStringLiteral("UTC") : tz) == QTimeZone::utc()) {
+        return dt.toTimeZone(QTimeZone::systemTimeZone()).addSecs(12 * 60 * 60).date();
+    }
+    return dt.date();
+}
+
+// The date the user sees, as midnight in their zone: the form To Do's clients write.
+QJsonObject taskDateToJson(const QDateTime &dt, bool allDay)
+{
+    const QDate date = allDay ? dt.date() : dt.toTimeZone(QTimeZone::systemTimeZone()).date();
+    return GraphEventHandler::toDateTimeTimeZone(QDateTime(date, QTime(0, 0)));
 }
 
 QJsonObject utcTaskDateTime(const QDateTime &dt)
@@ -70,18 +79,24 @@ KCalendarCore::Todo::Ptr toTodo(const QJsonObject &json)
         todo->setDescription(body.value(QLatin1String("content")).toString());
     }
 
-    const QDateTime start = parseTaskDateTime(json.value(QLatin1String("startDateTime")).toObject());
+    const QDate start = taskDate(json.value(QLatin1String("startDateTime")).toObject());
     if (start.isValid()) {
-        todo->setDtStart(start);
+        todo->setDtStart(QDateTime(start, QTime(0, 0)));
     }
-    const QDateTime due = parseTaskDateTime(json.value(QLatin1String("dueDateTime")).toObject());
+    const QDate due = taskDate(json.value(QLatin1String("dueDateTime")).toObject());
     if (due.isValid()) {
-        todo->setDtDue(due);
+        todo->setDtDue(QDateTime(due, QTime(0, 0)), true);
+        todo->setCustomProperty(kCustomApp.toByteArray(), kServerDue.toByteArray(), due.toString(Qt::ISODate));
     }
+    const QString modified = json.value(QLatin1String("lastModifiedDateTime")).toString();
+    if (!modified.isEmpty()) {
+        todo->setCustomProperty(kCustomApp.toByteArray(), kServerModified.toByteArray(), modified);
+    }
+    todo->setAllDay(start.isValid() || due.isValid());
 
     const QString status = json.value(QLatin1String("status")).toString();
     if (status == QLatin1String("completed")) {
-        const QDateTime completed = parseTaskDateTime(json.value(QLatin1String("completedDateTime")).toObject());
+        const QDateTime completed = GraphEventHandler::parseDateTimeTimeZone(json.value(QLatin1String("completedDateTime")).toObject());
         if (completed.isValid()) {
             todo->setCompleted(completed);
         } else {
@@ -99,7 +114,7 @@ KCalendarCore::Todo::Ptr toTodo(const QJsonObject &json)
     }
 
     if (json.value(QLatin1String("isReminderOn")).toBool()) {
-        const QDateTime reminder = parseTaskDateTime(json.value(QLatin1String("reminderDateTime")).toObject());
+        const QDateTime reminder = GraphEventHandler::parseDateTimeTimeZone(json.value(QLatin1String("reminderDateTime")).toObject());
         if (reminder.isValid()) {
             Alarm::Ptr alarm = todo->newAlarm();
             alarm->setDisplayAlarm(todo->summary());
@@ -139,10 +154,17 @@ QJsonObject toJson(const KCalendarCore::Todo::Ptr &todo)
     }
 
     if (todo->dtStart().isValid()) {
-        json.insert(QStringLiteral("startDateTime"), utcTaskDateTime(todo->dtStart()));
+        json.insert(QStringLiteral("startDateTime"), taskDateToJson(todo->dtStart(), todo->allDay()));
     }
     if (todo->dtDue().isValid()) {
-        json.insert(QStringLiteral("dueDateTime"), utcTaskDateTime(todo->dtDue()));
+        const QJsonObject due = taskDateToJson(todo->dtDue(), todo->allDay());
+        // To Do moves the due date of a recurring task on by one occurrence whenever
+        // it is written, whatever the value; leave an unchanged one out.
+        const QString serverDue = todo->customProperty(kCustomApp.toByteArray(), kServerDue.toByteArray());
+        const bool unchanged = todo->recurs() && !serverDue.isEmpty() && due.value(QLatin1String("dateTime")).toString().startsWith(serverDue);
+        if (!unchanged) {
+            json.insert(QStringLiteral("dueDateTime"), due);
+        }
     }
 
     if (todo->isCompleted()) {
@@ -186,5 +208,34 @@ QJsonObject toJson(const KCalendarCore::Todo::Ptr &todo)
         json.insert(QStringLiteral("recurrence"), recurrence);
     }
     return json;
+}
+
+QString serverDue(const KCalendarCore::Todo::Ptr &todo)
+{
+    return todo->customProperty(kCustomApp.toByteArray(), kServerDue.toByteArray());
+}
+
+void setServerDue(const KCalendarCore::Todo::Ptr &todo, const QString &date)
+{
+    // An empty value would be ignored rather than clear the property.
+    if (date.isEmpty()) {
+        todo->removeCustomProperty(kCustomApp.toByteArray(), kServerDue.toByteArray());
+    } else {
+        todo->setCustomProperty(kCustomApp.toByteArray(), kServerDue.toByteArray(), date);
+    }
+}
+
+QString serverModified(const KCalendarCore::Todo::Ptr &todo)
+{
+    return todo->customProperty(kCustomApp.toByteArray(), kServerModified.toByteArray());
+}
+
+QJsonObject toJsonForCreate(const KCalendarCore::Todo::Ptr &todo)
+{
+    // A new task (also one moved or copied to another list) gets its due date: the
+    // server-side one read with the payload belongs to the original.
+    const Todo::Ptr copy(todo->clone());
+    setServerDue(copy, QString());
+    return toJson(copy);
 }
 }
