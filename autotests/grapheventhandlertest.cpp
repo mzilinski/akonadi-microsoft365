@@ -826,7 +826,7 @@ private Q_SLOTS:
         // when only the title changed. Each case: the server's rule, the editor's
         // rewrite of it; the server's rule must be what goes out.
         struct Case {
-            const char *name;
+            const char *name = nullptr;
             QString start;
             QJsonObject pattern;
             std::function<void(Recurrence *)> editor;
