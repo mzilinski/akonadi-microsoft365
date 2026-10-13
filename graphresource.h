@@ -17,6 +17,7 @@
 #include "graphclient/graphclient.h"
 
 #include <QJsonObject>
+#include <QPointer>
 
 #include <functional>
 #include <memory>
@@ -25,6 +26,7 @@ class GraphBatchJob;
 class GraphSettings;
 class GraphOAuth;
 class KJob;
+class KNotification;
 class QTimer;
 
 /**
@@ -112,6 +114,8 @@ private:
     void onAuthReady();
     void onAuthFailed(const QString &error);
     void onAuthUnreachable();
+    void onAuthSignInRequired();
+    void notifySignInRequired(const QString &text); // persistent notification with a "Sign In" button
     void holdScheduler(); // stop the scheduler; what the running task still delivers is stale
     void signInAgain(); // hold the scheduler and get a new token
     void resumeScheduler(); // once no request from before going offline is still out
@@ -258,4 +262,6 @@ private:
     QHash<Akonadi::Item::Id, std::pair<QString, QString>> mWrittenDue;
     bool mResumeWhenIdle = false; // resume the scheduler once the client is idle
     bool mReauthenticate = false; // the server rejected the token; get a new one when back online
+    bool mSignInRequired = false; // the refresh token is dead; going online signs in in the browser
+    QPointer<KNotification> mSignInNotification;
 };

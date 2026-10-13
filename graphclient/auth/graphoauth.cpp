@@ -196,15 +196,39 @@ void GraphOAuth::onGranted()
     }
 }
 
-void GraphOAuth::onRequestFailed(QAbstractOAuth::Error error)
+GraphOAuth::Failure GraphOAuth::classifyFailure(QAbstractOAuth::Error error, int httpStatus, const QString &serverError, bool interactive)
 {
+    if (interactive) {
+        return Failure::Failed;
+    }
     // Without a network, or while the token service is down, the silent refresh fails
     // too; the refresh token is fine, and a browser sign-in would not get through either.
-    const int httpStatus = std::exchange(mTokenHttpStatus, 0);
-    const QString serverError = std::exchange(mServerError, QString());
     const bool serviceDown = error == QAbstractOAuth::Error::ServerError
         && (httpStatus >= 500 || httpStatus == 429 || serverError == QLatin1String("temporarily_unavailable") || serverError == QLatin1String("server_error"));
-    if (!mInteractive && (error == QAbstractOAuth::Error::NetworkError || serviceDown)) {
+    if (error == QAbstractOAuth::Error::NetworkError || serviceDown) {
+        return Failure::Unreachable;
+    }
+    // A dead refresh token: revoked by signing out everywhere or a password change
+    // (invalid_grant, AADSTS50173), or unused for more than 90 days.
+    return Failure::SignInRequired;
+}
+
+void GraphOAuth::signIn()
+{
+    if (qEnvironmentVariableIsSet("GRAPH_ACCESS_TOKEN")) {
+        authenticate();
+        return;
+    }
+    setUpFlow();
+    startInteractive();
+}
+
+void GraphOAuth::onRequestFailed(QAbstractOAuth::Error error)
+{
+    const int httpStatus = std::exchange(mTokenHttpStatus, 0);
+    const QString serverError = std::exchange(mServerError, QString());
+    switch (classifyFailure(error, httpStatus, serverError, mInteractive)) {
+    case Failure::Unreachable:
         qCInfo(GRAPHCLIENT_LOG) << "token endpoint not reachable" << httpStatus << serverError;
         if (mWasReady && mRefreshTimer) {
             // A background renewal: the current token still works for a while; try
@@ -213,15 +237,21 @@ void GraphOAuth::onRequestFailed(QAbstractOAuth::Error error)
         }
         Q_EMIT unreachable();
         return;
-    }
-    // A dead refresh token (revoked, >90 days idle) fails the silent path — retry
-    // interactively once before giving up.
-    if (!mInteractive) {
-        startInteractive();
+    case Failure::SignInRequired:
+        qCWarning(GRAPHCLIENT_LOG) << "refresh token no longer accepted, sign-in required" << httpStatus << serverError;
+        if (mRefreshTimer) {
+            mRefreshTimer->stop();
+        }
+        Q_EMIT signInRequired();
         return;
+    case Failure::Failed:
+        break;
     }
     if (mInteractiveTimeout) {
         mInteractiveTimeout->stop();
+    }
+    if (mReplyHandler) {
+        mReplyHandler->close();
     }
     Q_EMIT failed(i18n("OAuth2 request failed"));
 }

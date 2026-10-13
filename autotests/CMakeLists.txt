@@ -39,3 +39,4 @@ add_graph_test(graphmailhandlertest graphmailhandlertest.cpp ../mail/graphmailha
 add_graph_test(graphsyncstateattributetest graphsyncstateattributetest.cpp ../graphsyncstateattribute.cpp)
 add_graph_test(graphbatchjobtest graphbatchjobtest.cpp ../jobs/graphbatchjob.cpp)
 add_graph_test(graphretrypolicytest graphretrypolicytest.cpp)
+add_graph_test(graphoauthtest graphoauthtest.cpp)

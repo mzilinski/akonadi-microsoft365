@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Malte Zilinski <malte@zilinski.eu>
+# SPDX-License-Identifier: LGPL-2.0-or-later
+[Global]
+IconName=akonadi
+Comment=Microsoft 365
+
+[Event/sign-in-required]
+Name=Sign-in required
+Comment=The Microsoft 365 account needs a new sign-in
+Action=Popup

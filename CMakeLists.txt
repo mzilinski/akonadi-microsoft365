@@ -40,6 +40,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     find_package(KF6Config ${KF_MIN_VERSION} CONFIG REQUIRED)
     find_package(KF6CoreAddons ${KF_MIN_VERSION} CONFIG REQUIRED)
     find_package(KF6I18n ${KF_MIN_VERSION} CONFIG REQUIRED)
+    find_package(KF6Notifications ${KF_MIN_VERSION} CONFIG REQUIRED)
     find_package(KF6Mime CONFIG REQUIRED)
     find_package(KF6CalendarCore CONFIG REQUIRED)
     find_package(KF6Contacts CONFIG REQUIRED)
@@ -119,6 +120,7 @@ target_link_libraries(
     KF6::I18n
     KF6::ConfigCore
     KF6::ConfigGui
+    KF6::Notifications
     Qt::DBus
     graphclient
 )
@@ -257,6 +259,7 @@ if(BUILD_TESTING)
 endif()
 
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/graphresource.desktop DESTINATION "${KDE_INSTALL_DATAROOTDIR}/akonadi/agents")
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/akonadi_graph_resource.notifyrc DESTINATION "${KDE_INSTALL_KNOTIFYRCDIR}")
 install(
     TARGETS
         akonadi_graph_resource

@@ -40,6 +40,7 @@
 #include <Akonadi/SpecialMailCollections>
 #include <KLocalizedString>
 #include <KMime/Message>
+#include <KNotification>
 #include <QBuffer>
 #include <QCryptographicHash>
 #include <QTimer>
@@ -197,11 +198,19 @@ void GraphResource::setUpAuth()
     connect(mAuth.data(), &GraphOAuth::ready, this, &GraphResource::onAuthReady);
     connect(mAuth.data(), &GraphOAuth::failed, this, &GraphResource::onAuthFailed);
     connect(mAuth.data(), &GraphOAuth::unreachable, this, &GraphResource::onAuthUnreachable);
+    connect(mAuth.data(), &GraphOAuth::signInRequired, this, &GraphResource::onAuthSignInRequired);
     // Repoint the client before any request can run again: doSetOnline(true) re-enters
     // here while a poll sync or throttling retry may still be in flight, and such a
     // request would otherwise dereference the just-destroyed auth object in
     // GraphRequest::issue(). With the fresh (token-less) auth it gets a 401 instead.
     reconfigureClient();
+    if (mSignInRequired) {
+        // Only reached when the user switches the account online, or presses the
+        // notification's button: open the browser now.
+        Q_EMIT status(Running, i18nc("@info:status", "Waiting for the sign-in in the web browser"));
+        mAuth->signIn();
+        return;
+    }
     Q_EMIT status(Running, i18nc("@info:status", "Authenticating with Microsoft 365"));
     mAuth->authenticate();
 }
@@ -211,6 +220,10 @@ void GraphResource::onAuthReady()
     qCDebug(GRAPH_LOG) << "auth ready, starting collection tree sync";
     mAuthPending = false;
     mReauthenticate = false;
+    mSignInRequired = false;
+    if (mSignInNotification) {
+        mSignInNotification->close();
+    }
     reconfigureClient();
 
     // Every request now asks Graph for immutable ids (see GraphRequest::issue), so
@@ -270,11 +283,49 @@ void GraphResource::onAuthFailed(const QString &error)
 {
     qCWarning(GRAPH_LOG) << "auth failed:" << error;
     mAuthPending = false;
+    mSignInRequired = true;
     // Go offline like the IMAP resource does after a failed login: item requests then
     // fail at once instead of waiting for a scheduler that has no token to work with,
     // queued changes are kept, and switching the account online signs in again.
     setOnline(false);
     Q_EMIT status(Broken, i18nc("@info:status", "Authentication failed: %1", error));
+    notifySignInRequired(i18n("Signing in to Microsoft 365 failed: %1", error));
+}
+
+void GraphResource::onAuthSignInRequired()
+{
+    qCWarning(GRAPH_LOG) << "sign-in required, going offline";
+    mAuthPending = false;
+    mSignInRequired = true;
+    // Offline, as after a failed login, until the user signs in: a sync would only fail
+    // and leave KMail looking up to date. The access token may still work for a few
+    // minutes, but waiting for that to run out only delays the news.
+    setOnline(false);
+    Q_EMIT status(Broken, i18nc("@info:status", "Sign-in to Microsoft 365 required"));
+    notifySignInRequired(i18n("You have been signed out of Microsoft 365. Sign in again to receive new mail."));
+}
+
+void GraphResource::notifySignInRequired(const QString &text)
+{
+    if (mSignInNotification) {
+        mSignInNotification->setText(text);
+        return;
+    }
+    mSignInNotification = new KNotification(QStringLiteral("sign-in-required"), KNotification::Persistent, this);
+    mSignInNotification->setComponentName(QStringLiteral("akonadi_graph_resource"));
+    mSignInNotification->setTitle(name());
+    mSignInNotification->setText(text);
+    auto signInAction = mSignInNotification->addAction(i18nc("@action:button", "Sign In"));
+    connect(signInAction, &KNotificationAction::activated, this, [this] {
+        // doSetOnline(true) signs in in the browser while mSignInRequired is set;
+        // when the account is online already (first set-up), start it directly.
+        if (isOnline()) {
+            signInAgain();
+        } else {
+            setOnline(true);
+        }
+    });
+    mSignInNotification->sendEvent();
 }
 
 void GraphResource::onAuthUnreachable()
@@ -422,7 +473,7 @@ void GraphResource::doSetOnline(bool online)
         }
         return;
     }
-    if (mAuth && !mAuthPending && !mReauthenticate && mAuth->hasValidToken() && mSettings->immutableIdsMigrated()) {
+    if (mAuth && !mAuthPending && !mReauthenticate && !mSignInRequired && mAuth->hasValidToken() && mSettings->immutableIdsMigrated()) {
         // Back after a held-back replay or a network change, with a token that is
         // still good (GraphOAuth renews it in the background, but not during suspend):
         // carry on where we were, without signing in again or re-listing the folder tree.

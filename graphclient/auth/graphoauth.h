@@ -8,7 +8,8 @@
 
     Token lifecycle:
       authenticate() -> read refresh token from the keychain
-        -> found:   silent refresh (no UI); on failure fall back to interactive
+        -> found:   silent refresh (no UI); if the server no longer takes the refresh
+                    token, signInRequired() — the browser opens only on signIn()
         -> missing: interactive browser login (loopback redirect)
       granted -> persist new refresh token, schedule a proactive renewal shortly
                  before the access token expires, emit ready() (first time only).
@@ -38,8 +39,13 @@ public:
     GraphOAuth(const QString &tenantId, const QString &clientId, const QString &walletKey, QObject *parent = nullptr);
     ~GraphOAuth() override;
 
-    /// Try a silent refresh (stored refresh token via QtKeychain); fall back to interactive.
+    /// Silent refresh with the stored refresh token (QtKeychain). Opens the browser
+    /// only when there is none yet, i.e. on first set-up.
     void authenticate();
+
+    /// Interactive browser sign-in, skipping the stored refresh token. For when the
+    /// user asks for it after signInRequired().
+    void signIn();
 
     /// Drop persisted tokens (reconfigure/logout).
     void forgetTokens();
@@ -51,6 +57,14 @@ public:
     /// not run during suspend, so after a resume the token may have expired.
     [[nodiscard]] bool hasValidToken() const;
 
+    /// What a failed token request means for the account.
+    enum class Failure : uint8_t {
+        Unreachable, ///< no network, or the token service is down: try again later
+        SignInRequired, ///< the refresh token no longer works: the user has to sign in
+        Failed, ///< the interactive sign-in did not work out
+    };
+    [[nodiscard]] static Failure classifyFailure(QAbstractOAuth::Error error, int httpStatus, const QString &serverError, bool interactive);
+
 Q_SIGNALS:
     /// First successful token acquisition. Later silent renewals do not re-emit.
     void ready();
@@ -58,6 +72,10 @@ Q_SIGNALS:
     /// The token endpoint could not be reached. Nothing is wrong with the account:
     /// authenticate() again once the network is back.
     void unreachable();
+    /// The server no longer takes the refresh token (signed out, password changed,
+    /// revoked, unused for too long). Nothing opens by itself: a browser window
+    /// appearing out of the background goes unnoticed. signIn() when the user asks.
+    void signInRequired();
 
 private:
     [[nodiscard]] static QSet<QByteArray> graphScopes();
