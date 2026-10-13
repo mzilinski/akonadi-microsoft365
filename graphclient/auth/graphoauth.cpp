@@ -162,6 +162,16 @@ void GraphOAuth::startInteractive()
         mReplyHandler = new QOAuthHttpServerReplyHandler(this);
         mReplyHandler->setCallbackHost(QStringLiteral("localhost"));
         mReplyHandler->setCallbackPath(kCallbackPath);
+        // Qt titles the page that the browser shows after the redirect with the
+        // application name, which for an agent is its instance id
+        // ("akonadi_graph_resource_0"); the body goes out as given, so set the title from
+        // there. Shown for errors too, so it does not claim success.
+        const QString title = i18nc("@title:tab", "Microsoft 365 Sign-In").toHtmlEscaped();
+        const QString text = i18n("You can close this page now and return to your mail program.").toHtmlEscaped();
+        mReplyHandler->setCallbackText(QStringLiteral("<meta charset=\"utf-8\"><script>document.title = \"%1\";</script>"
+                                                      "<div style=\"font-family: sans-serif; margin: 3em auto; max-width: 30em; text-align: center\">"
+                                                      "<h2>%1</h2><p>%2</p></div>")
+                                           .arg(title, text));
     }
     if (!mReplyHandler->isListening() && !mReplyHandler->listen(QHostAddress::LocalHost, kCallbackPort)) {
         // Preferred port taken (e.g. another app of the same registration). Azure ignores
