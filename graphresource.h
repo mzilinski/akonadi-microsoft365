@@ -169,6 +169,10 @@ private:
                               const Akonadi::Item::List &removed,
                               const QString &deltaLink,
                               quint64 generation);
+    // A complete listing replaces the folder's content: local items the server no
+    // longer has are dropped (locally only — ItemSync does not replay its deletes).
+    void syncItemsFull(const Akonadi::Collection &collection, const Akonadi::Item::List &items, const QString &deltaLink, quint64 generation);
+    [[nodiscard]] Akonadi::ItemSync *createItemSync(const Akonadi::Collection &collection, const QString &deltaLink, quint64 generation);
     // Deliver on-demand payloads on freshly fetched items so the store cannot race
     // a concurrent delta (revision conflict) or clobber newer flags.
     void deliverFreshPayloads(const Akonadi::Item::List &filled, quint64 generation);

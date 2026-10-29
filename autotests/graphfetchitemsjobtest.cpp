@@ -146,10 +146,11 @@ private:
         Item::List removed;
         QStringList batchedIds;
         QByteArray deltaRequest;
+        bool fullListing = false;
         int error = 0;
     };
 
-    [[nodiscard]] Run run(const QJsonArray &entries, const QStringList &goneIds = {})
+    [[nodiscard]] Run run(const QJsonArray &entries, const QStringList &goneIds = {}, bool continueRound = false)
     {
         FakeDeltaServer server(entries, goneIds);
         GraphOAuth auth(QStringLiteral("tenant"), QStringLiteral("client"), QStringLiteral("wallet"));
@@ -159,7 +160,8 @@ private:
         Collection inbox(1);
         inbox.setRemoteId(QStringLiteral("inbox"));
 
-        auto job = new GraphFetchItemsJob(client, inbox, QString(), this);
+        const QString deltaLink = continueRound ? server.baseUrl() + QStringLiteral("/delta?token=0") : QString();
+        auto job = new GraphFetchItemsJob(client, inbox, deltaLink, this);
         QSignalSpy spy(job, &KJob::result);
         job->start();
         Run result;
@@ -171,6 +173,7 @@ private:
         result.removed = job->removedItems();
         result.batchedIds = server.batchedIds();
         result.deltaRequest = server.deltaRequest();
+        result.fullListing = job->isFullListing();
         result.error = job->error();
         return result;
     }
@@ -198,6 +201,18 @@ private Q_SLOTS:
         const QByteArray requestLine = r.deltaRequest.left(r.deltaRequest.indexOf("\r\n"));
         // $top would end the whole round after 200 messages.
         QVERIFY(!requestLine.contains("top="));
+        QVERIFY(r.deltaRequest.contains("odata.maxpagesize=200"));
+    }
+
+    void shouldTellAFullListingFromAnIncrementalRound()
+    {
+        // Without a stored deltaLink the round lists the whole folder ...
+        QVERIFY(run({}).fullListing);
+        // ... with one it only carries the changes since.
+        const Run r = run({}, {}, true);
+        QCOMPARE(r.error, 0);
+        QVERIFY(!r.fullListing);
+        // The page size is asked for on continued rounds too.
         QVERIFY(r.deltaRequest.contains("odata.maxpagesize=200"));
     }
 

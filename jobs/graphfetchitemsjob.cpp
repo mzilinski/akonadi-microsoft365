@@ -29,6 +29,7 @@ GraphFetchItemsJob::GraphFetchItemsJob(GraphClient &client, const Collection &co
 
 void GraphFetchItemsJob::start()
 {
+    mFullListing = mDeltaLink.isEmpty();
     auto req = new GraphRequest(mClient, this);
     if (!mDeltaLink.isEmpty()) {
         req->setAbsoluteUrl(QUrl(mDeltaLink));
@@ -188,6 +189,11 @@ Item::List GraphFetchItemsJob::removedItems() const
 QString GraphFetchItemsJob::deltaLink() const
 {
     return mDeltaLink;
+}
+
+bool GraphFetchItemsJob::isFullListing() const
+{
+    return mFullListing;
 }
 
 #include "moc_graphfetchitemsjob.cpp"

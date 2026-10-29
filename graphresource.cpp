@@ -958,6 +958,11 @@ void GraphResource::fetchItemsJobFinished(KJob *job, quint64 generation)
     qCDebug(GRAPH_LOG) << "mail delta" << fj->collection().name() << "changed:" << fj->changedItems().size() << "removed:" << fj->removedItems().size()
                        << "deltaLink:" << (fj->deltaLink().isEmpty() ? "none" : "present");
     // Delta returns light stubs (id/flags); payload is fetched on demand below.
+    if (fj->isFullListing()) {
+        // Also drops what an incomplete earlier sync left behind locally.
+        syncItemsFull(fj->collection(), fj->changedItems(), fj->deltaLink(), generation);
+        return;
+    }
     deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink(), generation);
 }
 
@@ -1024,13 +1029,23 @@ void GraphResource::syncItemsIncremental(const Collection &collection,
                                          const QString &deltaLink,
                                          quint64 generation)
 {
-    // Run the ItemSync ourselves instead of via itemsRetrievedIncremental() so the
+    // Connect before feeding: an empty delta finishes inside setIncrementalSyncItems().
+    createItemSync(collection, deltaLink, generation)->setIncrementalSyncItems(changed, removed);
+}
+
+void GraphResource::syncItemsFull(const Collection &collection, const Item::List &items, const QString &deltaLink, quint64 generation)
+{
+    createItemSync(collection, deltaLink, generation)->setFullSyncItems(items);
+}
+
+ItemSync *GraphResource::createItemSync(const Collection &collection, const QString &deltaLink, quint64 generation)
+{
+    // Run the ItemSync ourselves instead of via itemsRetrieved[Incremental]() so the
     // deltaLink is persisted only after the local commit succeeded. Saving it upfront
     // (as ResourceBase's flow forces) silently loses the whole batch when the commit
     // fails: the next delta starts after the never-applied changes.
     auto sync = new ItemSync(collection, {}, this);
     sync->setTransactionMode(ItemSync::SingleTransaction);
-    // Connect before feeding: an empty delta finishes inside setIncrementalSyncItems().
     connect(sync, &ItemSync::result, this, [this, collection, deltaLink, generation](KJob *job) {
         if (!job->error()) {
             // Committed: the deltaLink is right even when the task has been given up.
@@ -1045,7 +1060,7 @@ void GraphResource::syncItemsIncremental(const Collection &collection,
         }
         itemsRetrievalDone();
     });
-    sync->setIncrementalSyncItems(changed, removed);
+    return sync;
 }
 
 bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unused]] const QSet<QByteArray> &parts)

@@ -27,6 +27,8 @@ public:
     [[nodiscard]] Akonadi::Item::List changedItems() const;
     [[nodiscard]] Akonadi::Item::List removedItems() const;
     [[nodiscard]] QString deltaLink() const;
+    /// The round started without a deltaLink, so it listed every message in the folder.
+    [[nodiscard]] bool isFullListing() const;
 
 private:
     void onRequestFinished(KJob *);
@@ -36,6 +38,7 @@ private:
     GraphClient &mClient;
     Akonadi::Collection mCollection;
     QString mDeltaLink;
+    bool mFullListing = false;
     Akonadi::Item::List mChanged;
     Akonadi::Item::List mRemoved;
 };
