@@ -9,9 +9,9 @@
     job runs against something that looks like Graph without talking to Microsoft.
 */
 
+#include "jobs/graphfetchitemsjob.h"
 #include "graphclient/auth/graphoauth.h"
 #include "graphclient/graphclient.h"
-#include "jobs/graphfetchitemsjob.h"
 
 #include <Akonadi/MessageFlags>
 #include <KMime/Message>
@@ -104,7 +104,8 @@ protected:
 private:
     [[nodiscard]] QByteArray answerDelta() const
     {
-        const QJsonObject page{{QStringLiteral("value"), mDeltaEntries}, {QStringLiteral("@odata.deltaLink"), QString(baseUrl() + QStringLiteral("/delta?token=1"))}};
+        const QJsonObject page{{QStringLiteral("value"), mDeltaEntries},
+                               {QStringLiteral("@odata.deltaLink"), QString(baseUrl() + QStringLiteral("/delta?token=1"))}};
         return QJsonDocument(page).toJson(QJsonDocument::Compact);
     }
 
@@ -244,7 +245,8 @@ private Q_SLOTS:
 
     void shouldKeepTombstones()
     {
-        const QJsonObject removed{{QStringLiteral("id"), QStringLiteral("m3")}, {QStringLiteral("@removed"), QJsonObject{{QStringLiteral("reason"), QStringLiteral("deleted")}}}};
+        const QJsonObject removed{{QStringLiteral("id"), QStringLiteral("m3")},
+                                  {QStringLiteral("@removed"), QJsonObject{{QStringLiteral("reason"), QStringLiteral("deleted")}}}};
         const Run r = run({removed});
         QCOMPARE(r.error, 0);
         QVERIFY(r.changed.isEmpty());
