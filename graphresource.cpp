@@ -72,6 +72,9 @@ constexpr int kSignInRetrySeconds = 60;
 // so that items cached by an older mapping are rebuilt. 1: event time zones, all
 // recurrence patterns, Windows zone names on tasks.
 constexpr int kPimMappingVersion = 1;
+// Version of the mail sync state. 1: the stored deltaLinks no longer carry $top,
+// which capped every delta round at 200 messages.
+constexpr int kMailMappingVersion = 1;
 
 // Graph uses a different endpoint family per collection type; mail is the default.
 enum class CollectionKind {
@@ -2000,8 +2003,16 @@ void GraphResource::clearFolderSyncState()
 // ----- delta-link (sync state) helpers -----
 int GraphResource::mappingVersion(const Collection &col)
 {
-    const QStringList mimes = col.contentMimeTypes();
-    return mimes.contains(GraphEventHandler::mimeType()) || mimes.contains(GraphTodoHandler::mimeType()) ? kPimMappingVersion : 0;
+    switch (collectionKind(col)) {
+    case CollectionKind::Calendar:
+    case CollectionKind::Todo:
+        return kPimMappingVersion;
+    case CollectionKind::Mail:
+        return kMailMappingVersion;
+    case CollectionKind::Contacts:
+        break;
+    }
+    return 0;
 }
 
 QString GraphResource::collectionDeltaLink(const Collection &col)

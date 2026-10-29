@@ -43,6 +43,12 @@ public:
         return QStringLiteral("http://127.0.0.1:%1").arg(serverPort());
     }
 
+    /// The raw delta request (request line and headers).
+    [[nodiscard]] QByteArray deltaRequest() const
+    {
+        return mDeltaRequest;
+    }
+
     /// Message ids the job asked for through /$batch.
     [[nodiscard]] QStringList batchedIds() const
     {
@@ -79,6 +85,9 @@ protected:
             const int length = lengthPos < 0 ? 0 : mRequest.mid(lengthPos + 15, mRequest.indexOf("\r\n", lengthPos) - lengthPos - 15).trimmed().toInt();
             if (mRequest.size() < bodyStart + length) {
                 return; // body still incomplete
+            }
+            if (!mRequest.startsWith("POST")) {
+                mDeltaRequest = mRequest.left(headerEnd);
             }
             const QByteArray reply = mRequest.startsWith("POST") ? answerBatch(mRequest.mid(bodyStart, length)) : answerDelta();
             mRequest.clear();
@@ -124,6 +133,7 @@ private:
     const QJsonArray mDeltaEntries;
     const QStringList mGoneIds;
     QStringList mBatchedIds;
+    QByteArray mDeltaRequest;
     QByteArray mRequest;
 };
 
@@ -135,6 +145,7 @@ private:
         Item::List changed;
         Item::List removed;
         QStringList batchedIds;
+        QByteArray deltaRequest;
         int error = 0;
     };
 
@@ -159,6 +170,7 @@ private:
         result.changed = job->changedItems();
         result.removed = job->removedItems();
         result.batchedIds = server.batchedIds();
+        result.deltaRequest = server.deltaRequest();
         result.error = job->error();
         return result;
     }
@@ -177,6 +189,16 @@ private Q_SLOTS:
         // Nothing to fetch on top of the delta.
         QVERIFY(r.batchedIds.isEmpty());
         QCOMPARE(message(r.changed.first())->subject()->asUnicodeString(), QStringLiteral("Subject of m1"));
+    }
+
+    void shouldAskForPagesInsteadOfATotal()
+    {
+        const Run r = run({});
+        QCOMPARE(r.error, 0);
+        const QByteArray requestLine = r.deltaRequest.left(r.deltaRequest.indexOf("\r\n"));
+        // $top would end the whole round after 200 messages.
+        QVERIFY(!requestLine.contains("top="));
+        QVERIFY(r.deltaRequest.contains("odata.maxpagesize=200"));
     }
 
     void shouldFetchTheEnvelopeOfEntriesWithoutIt()

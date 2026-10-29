@@ -35,10 +35,12 @@ void GraphFetchItemsJob::start()
     } else {
         // Fetch the envelope fields so the message list works without touching the
         // server again (mirrors EwsFetchMailDetailJob); the body comes via /$value.
-        // $top=200: delta defaults to ~10 items per page, which turns a big mailbox
-        // into thousands of round trips. 200 is Graph's maximum for messages.
-        req->setPath(QStringLiteral("/me/mailFolders/%1/messages/delta?$top=200&$select=%2").arg(mCollection.remoteId(), kEnvelopeFields));
+        req->setPath(QStringLiteral("/me/mailFolders/%1/messages/delta?$select=%2").arg(mCollection.remoteId(), kEnvelopeFields));
     }
+    // Delta defaults to ~10 messages per page, which turns a big mailbox into
+    // thousands of round trips. Not $top: in a delta it caps the whole round, which
+    // then ends after 200 messages with a deltaLink as if that were all of them.
+    req->addHeader("Prefer", "odata.maxpagesize=200");
     connect(req, &KJob::result, this, &GraphFetchItemsJob::onRequestFinished);
     req->start();
 }
