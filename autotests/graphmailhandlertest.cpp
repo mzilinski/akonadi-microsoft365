@@ -70,8 +70,9 @@ private Q_SLOTS:
 
     void shouldReadMessageIdOfRawMime()
     {
-        const QByteArray mime = "From: Alice <alice@example.com>\r\nMessage-ID: <abc.123@example.com>\r\nSubject: Hello\r\n\r\n"
-                                "Message-ID: <in.the.body@example.com>\r\n";
+        const QByteArray mime =
+            "From: Alice <alice@example.com>\r\nMessage-ID: <abc.123@example.com>\r\nSubject: Hello\r\n\r\n"
+            "Message-ID: <in.the.body@example.com>\r\n";
         QCOMPARE(GraphMailHandler::messageIdOfMime(mime), QStringLiteral("<abc.123@example.com>"));
     }
 
