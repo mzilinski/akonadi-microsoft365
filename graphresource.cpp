@@ -1986,8 +1986,26 @@ void GraphResource::sendMessage(const QString &id, const QByteArray &content)
         auto sendReq = new GraphRequest(mClient, this);
         sendReq->setMethod(GraphRequest::Method::Post);
         sendReq->setPath(QStringLiteral("/me/messages/%1/send").arg(draftId));
-        connect(sendReq, &KJob::result, this, [this, id](KJob *job) {
-            Q_EMIT messageSent(id, job->error() ? job->errorText() : QString());
+        connect(sendReq, &KJob::result, this, [this, id, draftId, sendReq](KJob *job) {
+            if (!job->error()) {
+                Q_EMIT messageSent(id, QString());
+                return;
+            }
+            // The message stays in the outbox, so the draft made for this attempt would
+            // only pile up in Drafts, one per attempt. Keep it when the server may have
+            // sent the message after all: it is then on its way to Sent Items.
+            if (sendReq->failure() != GraphRequest::Failure::Uncertain) {
+                auto del = new GraphRequest(mClient, this);
+                del->setMethod(GraphRequest::Method::Delete);
+                del->setPath(QStringLiteral("/me/messages/%1").arg(draftId));
+                connect(del, &KJob::result, this, [del](KJob *dj) {
+                    if (dj->error() && del->httpStatus() != 404) {
+                        qCWarning(GRAPH_LOG) << "could not delete the draft of a failed send:" << dj->errorText();
+                    }
+                });
+                del->start();
+            }
+            Q_EMIT messageSent(id, job->errorText());
         });
         sendReq->start();
     });
