@@ -75,6 +75,8 @@ constexpr int kPimMappingVersion = 1;
 // Version of the mail sync state. 1: the stored deltaLinks no longer carry $top,
 // which capped every delta round at 200 messages.
 constexpr int kMailMappingVersion = 1;
+// How many sent mails may wait for their copy to be filed into Sent Items.
+constexpr int kMaxPendingSentCopies = 50;
 
 // Graph uses a different endpoint family per collection type; mail is the default.
 enum class CollectionKind {
@@ -1444,23 +1446,29 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
 
     // Server-side sent copy: Graph files the message into "Sent Items" itself when the
     // MTA calls /send. If KMail then also files an Fcc copy here, adopt the server's copy
-    // (matched by Message-ID) instead of POSTing a duplicate.
+    // (matched by Message-ID) instead of POSTing a duplicate. A copy of a mail that went
+    // out through another transport has no server counterpart and is uploaded.
     if (!mSentFolderRemoteId.isEmpty() && collection.remoteId() == mSentFolderRemoteId && item.hasPayload<std::shared_ptr<KMime::Message>>()) {
         const auto msg = item.payload<std::shared_ptr<KMime::Message>>();
         auto *midHeader = msg->messageID(KMime::DontCreate);
         const QString messageId = midHeader ? midHeader->asUnicodeString() : QString();
         if (!messageId.isEmpty()) {
-            reconcileSentItem(item, messageId, replay);
+            reconcileSentItem(item, messageId, mGraphSentMessageIds.removeOne(messageId), replay);
             return;
         }
     }
 
+    uploadMailItem(item, collection.remoteId(), replay);
+}
+
+void GraphResource::uploadMailItem(const Akonadi::Item &item, const QString &folderRid, const Replay &replay)
+{
     const auto [rawMime, contentType] = GraphMailHandler::createFromMime(item);
     if (rawMime.isEmpty()) {
-        changeProcessed();
+        skipChange(replay);
         return;
     }
-    createMimeMessage(rawMime, contentType, collection.remoteId(), [this, item, replay](const QString &newId, const QString &error, KJob *failedCreate) {
+    createMimeMessage(rawMime, contentType, folderRid, [this, item, replay](const QString &newId, const QString &error, KJob *failedCreate) {
         if (newId.isEmpty()) {
             // Only a failed create leaves nothing behind that a retry could duplicate.
             if (retryLater(failedCreate, replay, false, false)) {
@@ -1602,7 +1610,7 @@ void GraphResource::putContactPhotoThenCommit(const Akonadi::Item &item, const R
     req->start();
 }
 
-void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &messageId, const Replay &replay)
+void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &messageId, bool sentViaGraph, const Replay &replay)
 {
     // Find Graph's auto-filed copy in Sent Items by its Internet Message-ID.
     // OData string literals escape a single quote by doubling it.
@@ -1611,7 +1619,7 @@ void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &
     const QString filter = QStringLiteral("internetMessageId eq '%1'").arg(escapedId);
     auto req = new GraphRequest(mClient, this);
     req->setPath(QStringLiteral("/me/mailFolders/sentitems/messages?$select=id&$top=1&$filter=%1").arg(QString::fromUtf8(QUrl::toPercentEncoding(filter))));
-    connect(req, &KJob::result, this, [this, item, req, replay](KJob *job) {
+    connect(req, &KJob::result, this, [this, item, req, sentViaGraph, replay](KJob *job) {
         if (retryLater(job, replay, true, false)) {
             return;
         }
@@ -1624,10 +1632,14 @@ void GraphResource::reconcileSentItem(const Akonadi::Item &item, const QString &
             Item newItem(item);
             newItem.setRemoteId(values.first().toObject().value(QLatin1String("id")).toString());
             commitItem(replay, newItem); // adopt the server copy; no duplicate created
-        } else {
+        } else if (sentViaGraph) {
             // Auto-copy not visible yet — drop the local duplicate; the next delta
             // sync will bring the server's copy with its real id.
             skipChange(replay);
+        } else {
+            // Sent through another transport (an identity that sends via SMTP but files
+            // its copies here): the server never gets a copy unless it is uploaded.
+            uploadMailItem(item, mSentFolderRemoteId, replay);
         }
     });
     req->start();
@@ -1976,7 +1988,8 @@ void GraphResource::sendMessage(const QString &id, const QByteArray &content)
     createReq->setMethod(GraphRequest::Method::Post);
     createReq->setPath(QStringLiteral("/me/messages"));
     createReq->setRawBody(content.toBase64(), QByteArrayLiteral("text/plain"));
-    connect(createReq, &KJob::result, this, [this, id, createReq](KJob *job) {
+    const QString messageId = GraphMailHandler::messageIdOfMime(content);
+    connect(createReq, &KJob::result, this, [this, id, messageId, createReq](KJob *job) {
         if (job->error()) {
             Q_EMIT messageSent(id, job->errorText());
             return;
@@ -1986,8 +1999,14 @@ void GraphResource::sendMessage(const QString &id, const QByteArray &content)
         auto sendReq = new GraphRequest(mClient, this);
         sendReq->setMethod(GraphRequest::Method::Post);
         sendReq->setPath(QStringLiteral("/me/messages/%1/send").arg(draftId));
-        connect(sendReq, &KJob::result, this, [this, id, draftId, sendReq](KJob *job) {
+        connect(sendReq, &KJob::result, this, [this, id, draftId, messageId, sendReq](KJob *job) {
             if (!job->error()) {
+                if (!messageId.isEmpty()) {
+                    mGraphSentMessageIds.append(messageId);
+                    while (mGraphSentMessageIds.size() > kMaxPendingSentCopies) {
+                        mGraphSentMessageIds.removeFirst();
+                    }
+                }
                 Q_EMIT messageSent(id, QString());
                 return;
             }

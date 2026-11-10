@@ -188,8 +188,11 @@ private:
     // Tag Inbox/Sent/Drafts/Trash/Junk/Outbox as Akonadi special collections so KMail
     // and the unified-mailbox agent treat them correctly. Applied inline during sync.
     void applySpecialAttributes(Akonadi::Collection &col);
-    // Adopt Graph's server-side sent copy instead of creating a duplicate.
-    void reconcileSentItem(const Akonadi::Item &item, const QString &messageId, const Replay &replay);
+    // A copy filed into Sent Items: adopt the one Graph filed itself when the message
+    // went out through this account, upload it when it was sent some other way.
+    void reconcileSentItem(const Akonadi::Item &item, const QString &messageId, bool sentViaGraph, const Replay &replay);
+    // POST a mail item's MIME into a folder and commit the item with its new id.
+    void uploadMailItem(const Akonadi::Item &item, const QString &folderRid, const Replay &replay);
     // Draft edits: Graph cannot replace MIME in place — recreate the draft, drop the old one.
     [[nodiscard]] bool isDraftsCollection(const Akonadi::Collection &col) const;
     void replaceDraft(const Akonadi::Item &item, const Replay &replay);
@@ -247,6 +250,10 @@ private:
     Akonadi::Collection mRootCollection;
     QString mFolderDeltaLink; // top-level mailFolders delta
     QString mSentFolderRemoteId; // resolved "Sent Items" folder id (sent reconciliation)
+    // Message-IDs of mails sent through sendMessage() whose copy has not been filed into
+    // Sent Items yet. Kept in memory and bounded: an entry stays only when the sending
+    // identity files its copies somewhere else.
+    QStringList mGraphSentMessageIds;
     QHash<QString, int> mSpecialFolderIndex; // remoteId -> kSpecialFolders index
     Akonadi::Collection::List mExtraCollections; // calendars + contacts
     QSet<QString> mKnownExtraIds; // to report server-side deletions (no delta for these)

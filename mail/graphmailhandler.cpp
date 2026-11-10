@@ -37,4 +37,16 @@ QPair<QByteArray, QByteArray> createFromMime(const Akonadi::Item &item)
     // caller then POSTs .../send.
     return {msg->encodedContent(KMime::NewlineType::CRLF).toBase64(), QByteArray("text/plain")};
 }
+
+QString messageIdOfMime(const QByteArray &rawMime)
+{
+    // Only the header block is needed; leave the (possibly large) body unparsed.
+    const QByteArray lf = KMime::CRLFtoLF(rawMime);
+    const qsizetype headEnd = lf.indexOf("\n\n");
+    KMime::Message head;
+    head.setContent(headEnd < 0 ? lf : lf.left(headEnd + 1));
+    head.parse();
+    const auto *messageId = head.messageID(KMime::DontCreate);
+    return messageId ? messageId->asUnicodeString() : QString();
+}
 }

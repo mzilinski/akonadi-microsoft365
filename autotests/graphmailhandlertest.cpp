@@ -68,6 +68,31 @@ private Q_SLOTS:
         QVERIFY(mime.contains("\r\n"));
     }
 
+    void shouldReadMessageIdOfRawMime()
+    {
+        const QByteArray mime = "From: Alice <alice@example.com>\r\nMessage-ID: <abc.123@example.com>\r\nSubject: Hello\r\n\r\n"
+                                "Message-ID: <in.the.body@example.com>\r\n";
+        QCOMPARE(GraphMailHandler::messageIdOfMime(mime), QStringLiteral("<abc.123@example.com>"));
+    }
+
+    void shouldReadMessageIdLikeAParsedMessage()
+    {
+        // The sent-copy reconciliation compares this with the id of the Akonadi payload.
+        auto msg = std::make_shared<KMime::Message>();
+        msg->messageID()->from7BitString("<same.form@example.com>");
+        msg->subject()->fromUnicodeString(QStringLiteral("Hello"));
+        msg->setBody("Test body\n");
+        msg->assemble();
+
+        QCOMPARE(GraphMailHandler::messageIdOfMime(msg->encodedContent(KMime::NewlineType::CRLF)), msg->messageID()->asUnicodeString());
+    }
+
+    void shouldReturnNoMessageIdWithoutHeader()
+    {
+        QVERIFY(GraphMailHandler::messageIdOfMime("Subject: Hello\r\n\r\nBody\r\n").isEmpty());
+        QVERIFY(GraphMailHandler::messageIdOfMime(QByteArray()).isEmpty());
+    }
+
     void shouldReturnEmptyWithoutPayload()
     {
         const Item item;
