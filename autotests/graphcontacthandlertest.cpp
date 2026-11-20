@@ -9,6 +9,7 @@
 
 #include <KContacts/Address>
 #include <KContacts/PhoneNumber>
+#include <KContacts/VCardConverter>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -141,6 +142,81 @@ private:
     static Addressee addressee()
     {
         return GraphContactHandler::toAddressee(sampleContact());
+    }
+
+    // Review 2026-11, I5: the contact round-trip lost data.
+    static QJsonObject serverContact()
+    {
+        QJsonObject json;
+        json.insert(QStringLiteral("id"), QStringLiteral("C1"));
+        json.insert(QStringLiteral("givenName"), QStringLiteral("Ada"));
+        json.insert(
+            QStringLiteral("emailAddresses"),
+            QJsonArray{QJsonObject{{QStringLiteral("address"), QStringLiteral("ada@example.org")}, {QStringLiteral("name"), QStringLiteral("Ada Lovelace")}},
+                       QJsonObject{{QStringLiteral("address"), QStringLiteral("ada@work.example")}, {QStringLiteral("name"), QStringLiteral("Ada (Work)")}}});
+        json.insert(QStringLiteral("mobilePhone"), QStringLiteral("+49 170 1"));
+        json.insert(QStringLiteral("homeAddress"),
+                    QJsonObject{{QStringLiteral("street"), QStringLiteral("Main St 1")}, {QStringLiteral("city"), QStringLiteral("Berlin")}});
+        return json;
+    }
+
+    // As Akonadi stores it: through vCard and back.
+    static KContacts::Addressee throughVCard(const KContacts::Addressee &a)
+    {
+        KContacts::VCardConverter converter;
+        return converter.parseVCard(converter.createVCard(a));
+    }
+
+    void shouldKeepTheDisplayNamesOfEmailAddresses()
+    {
+        const KContacts::Addressee a = throughVCard(GraphContactHandler::toAddressee(serverContact()));
+        const QJsonArray emails = GraphContactHandler::toJson(a).value(QLatin1String("emailAddresses")).toArray();
+        QCOMPARE(emails.size(), 2);
+        QCOMPARE(emails.at(0).toObject().value(QLatin1String("name")).toString(), QStringLiteral("Ada Lovelace"));
+        QCOMPARE(emails.at(1).toObject().value(QLatin1String("name")).toString(), QStringLiteral("Ada (Work)"));
+    }
+
+    void shouldSendAtMostThreeEmailAddressesPreferredFirst()
+    {
+        KContacts::Addressee a;
+        for (int i = 0; i < 4; ++i) {
+            KContacts::Email email(QStringLiteral("a%1@example.org").arg(i));
+            email.setPreferred(i == 3);
+            a.addEmail(email);
+        }
+        const QJsonArray emails = GraphContactHandler::toJson(a).value(QLatin1String("emailAddresses")).toArray();
+        QCOMPARE(emails.size(), 3);
+        QCOMPARE(emails.at(0).toObject().value(QLatin1String("address")).toString(), QStringLiteral("a3@example.org"));
+    }
+
+    void shouldNotSendFaxOrPagerNumbersAsBusinessNumbers()
+    {
+        KContacts::Addressee a;
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("1"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("2"), KContacts::PhoneNumber::Work | KContacts::PhoneNumber::Fax));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("3"), KContacts::PhoneNumber::Pager));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("4"), KContacts::PhoneNumber::Cell));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("5"), KContacts::PhoneNumber::Cell | KContacts::PhoneNumber::Pref));
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), QJsonArray{QStringLiteral("1")});
+        QCOMPARE(json.value(QLatin1String("mobilePhone")).toString(), QStringLiteral("5"));
+    }
+
+    void shouldClearARemovedAddressAndMobileTheServerHad()
+    {
+        KContacts::Addressee a = throughVCard(GraphContactHandler::toAddressee(serverContact()));
+        a.removeAddress(a.address(KContacts::Address::Home));
+        const auto phones = a.phoneNumbers();
+        for (const auto &p : phones) {
+            a.removePhoneNumber(p);
+        }
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QVERIFY(json.contains(QLatin1String("homeAddress")));
+        QCOMPARE(json.value(QLatin1String("homeAddress")).toObject().value(QLatin1String("street")).toString(), QString());
+        QVERIFY(json.contains(QLatin1String("mobilePhone")));
+        QCOMPARE(json.value(QLatin1String("mobilePhone")).toString(), QString());
+        // Nothing to clear that the server never had.
+        QVERIFY(!json.contains(QLatin1String("businessAddress")));
     }
 };
 

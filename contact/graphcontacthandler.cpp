@@ -11,11 +11,29 @@
 
 #include <QDateTime>
 #include <QJsonArray>
+#include <QJsonDocument>
+
+#include <algorithm>
 
 using namespace KContacts;
 
 namespace
 {
+// What vCard cannot hold, kept as custom fields (X-GRAPH-...) of the contact:
+// the display name Graph keeps with each e-mail address (a JSON object address -> name),
+// and which of the single-valued fields the server had, so that removing one in KDE
+// clears it there.
+const QString kCustomApp = QStringLiteral("GRAPH");
+const QString kEmailNames = QStringLiteral("EMAIL-NAMES");
+const QString kServerHad = QStringLiteral("SERVER-HAD");
+// Graph keeps at most three e-mail addresses per contact and rejects more.
+constexpr int kMaxEmails = 3;
+
+QStringList serverHad(const Addressee &a)
+{
+    return a.custom(kCustomApp, kServerHad).split(QLatin1Char(','), Qt::SkipEmptyParts);
+}
+
 void addPhones(Addressee &a, const QJsonArray &numbers, PhoneNumber::Type type)
 {
     for (const auto &n : numbers) {
@@ -47,6 +65,11 @@ QJsonObject addressToJson(const Address &addr)
     o.insert(QStringLiteral("countryOrRegion"), addr.country());
     return o;
 }
+
+QJsonObject emptyAddress()
+{
+    return addressToJson(Address());
+}
 } // namespace
 
 namespace GraphContactHandler
@@ -67,20 +90,31 @@ KContacts::Addressee toAddressee(const QJsonObject &json)
     a.setFormattedName(json.value(QLatin1String("displayName")).toString());
 
     const QJsonArray emails = json.value(QLatin1String("emailAddresses")).toArray();
+    QJsonObject names;
     for (int i = 0; i < emails.size(); ++i) {
-        const QString addr = emails.at(i).toObject().value(QLatin1String("address")).toString();
+        const QJsonObject entry = emails.at(i).toObject();
+        const QString addr = entry.value(QLatin1String("address")).toString();
         if (!addr.isEmpty()) {
             Email email(addr);
             email.setPreferred(i == 0);
             a.addEmail(email);
+            const QString name = entry.value(QLatin1String("name")).toString();
+            if (!name.isEmpty()) {
+                names.insert(addr.toLower(), name);
+            }
         }
     }
+    if (!names.isEmpty()) {
+        a.insertCustom(kCustomApp, kEmailNames, QString::fromUtf8(QJsonDocument(names).toJson(QJsonDocument::Compact)));
+    }
+    QStringList had;
 
     addPhones(a, json.value(QLatin1String("businessPhones")).toArray(), PhoneNumber::Work);
     addPhones(a, json.value(QLatin1String("homePhones")).toArray(), PhoneNumber::Home);
     const QString mobile = json.value(QLatin1String("mobilePhone")).toString();
     if (!mobile.isEmpty()) {
         a.insertPhoneNumber(PhoneNumber(mobile, PhoneNumber::Cell));
+        had << QStringLiteral("mobilePhone");
     }
 
     a.setTitle(json.value(QLatin1String("jobTitle")).toString());
@@ -90,11 +124,22 @@ KContacts::Addressee toAddressee(const QJsonObject &json)
 
     const QJsonObject business = json.value(QLatin1String("businessAddress")).toObject();
     if (!business.isEmpty() && business.contains(QLatin1String("street"))) {
-        a.insertAddress(toAddress(business, Address::Work));
+        const Address addr = toAddress(business, Address::Work);
+        if (!addr.isEmpty()) {
+            a.insertAddress(addr);
+            had << QStringLiteral("businessAddress");
+        }
     }
     const QJsonObject home = json.value(QLatin1String("homeAddress")).toObject();
     if (!home.isEmpty() && home.contains(QLatin1String("street"))) {
-        a.insertAddress(toAddress(home, Address::Home));
+        const Address addr = toAddress(home, Address::Home);
+        if (!addr.isEmpty()) {
+            a.insertAddress(addr);
+            had << QStringLiteral("homeAddress");
+        }
+    }
+    if (!had.isEmpty()) {
+        a.insertCustom(kCustomApp, kServerHad, had.join(QLatin1Char(',')));
     }
 
     const QString birthday = json.value(QLatin1String("birthday")).toString();
@@ -138,21 +183,46 @@ QJsonObject toJson(const KContacts::Addressee &a)
     // Exchange reacts to a birthday write by creating a recurring event in the
     // Birthdays calendar, which a plain contact edit must not silently do.
 
+    // The preferred address first, with the display name the server had for it
+    // (rewriting the list without names wiped them); at most three, as Graph takes.
+    const QJsonObject names = QJsonDocument::fromJson(a.custom(kCustomApp, kEmailNames).toUtf8()).object();
+    Email::List emailList = a.emailList();
+    std::stable_partition(emailList.begin(), emailList.end(), [](const Email &e) {
+        return e.isPreferred();
+    });
     QJsonArray emails;
-    const auto emailList = a.emails();
-    for (const QString &e : emailList) {
+    for (const Email &e : std::as_const(emailList)) {
+        if (e.mail().isEmpty() || emails.size() >= kMaxEmails) {
+            continue;
+        }
         QJsonObject eo;
-        eo.insert(QStringLiteral("address"), e);
+        eo.insert(QStringLiteral("address"), e.mail());
+        const QString name = names.value(e.mail().toLower()).toString();
+        if (!name.isEmpty()) {
+            eo.insert(QStringLiteral("name"), name);
+        }
         emails.append(eo);
     }
     json.insert(QStringLiteral("emailAddresses"), emails);
 
+    // Graph has business and home numbers and one mobile number. Fax, pager, modem
+    // and mailbox numbers have no place there; sending them as business numbers put
+    // them where they do not belong.
+    const PhoneNumber::Type noPlace = PhoneNumber::Fax | PhoneNumber::Pager | PhoneNumber::Modem | PhoneNumber::Bbs | PhoneNumber::Msg;
     QJsonArray business, home;
     const auto phones = a.phoneNumbers();
     QString mobile;
+    bool mobileIsPreferred = false;
     for (const PhoneNumber &p : phones) {
+        if (p.number().isEmpty() || (p.type() & noPlace)) {
+            continue;
+        }
         if (p.type() & PhoneNumber::Cell) {
-            mobile = p.number();
+            const bool preferred = p.type().testFlag(PhoneNumber::Pref);
+            if (mobile.isEmpty() || (preferred && !mobileIsPreferred)) {
+                mobile = p.number();
+                mobileIsPreferred = preferred;
+            }
         } else if (p.type() & PhoneNumber::Home) {
             home.append(p.number());
         } else {
@@ -161,17 +231,25 @@ QJsonObject toJson(const KContacts::Addressee &a)
     }
     json.insert(QStringLiteral("businessPhones"), business);
     json.insert(QStringLiteral("homePhones"), home);
+    const QStringList had = serverHad(a);
     if (!mobile.isEmpty()) {
         json.insert(QStringLiteral("mobilePhone"), mobile);
+    } else if (had.contains(QLatin1String("mobilePhone"))) {
+        json.insert(QStringLiteral("mobilePhone"), QString());
     }
 
+    // An address removed in KDE is emptied on the server, when it had one.
     const Address work = a.address(Address::Work);
     if (!work.isEmpty()) {
         json.insert(QStringLiteral("businessAddress"), addressToJson(work));
+    } else if (had.contains(QLatin1String("businessAddress"))) {
+        json.insert(QStringLiteral("businessAddress"), emptyAddress());
     }
     const Address homeAddr = a.address(Address::Home);
     if (!homeAddr.isEmpty()) {
         json.insert(QStringLiteral("homeAddress"), addressToJson(homeAddr));
+    } else if (had.contains(QLatin1String("homeAddress"))) {
+        json.insert(QStringLiteral("homeAddress"), emptyAddress());
     }
 
     json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(a.categories()));
