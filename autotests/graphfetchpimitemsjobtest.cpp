@@ -83,6 +83,9 @@ private Q_SLOTS:
         QTest::addColumn<QByteArray>("code");
         QTest::newRow("410 Gone") << 410 << QByteArrayLiteral("SyncStateNotFound");
         QTest::newRow("400 ErrorInvalidSyncStateData") << 400 << QByteArrayLiteral("ErrorInvalidSyncStateData");
+        // Review 2026-11, I8: other names Graph gives an expired state.
+        QTest::newRow("400 syncStateNotFound") << 400 << QByteArrayLiteral("syncStateNotFound");
+        QTest::newRow("400 resyncRequired") << 400 << QByteArrayLiteral("resyncRequired");
     }
 
     void shouldListInFullAfterTheDeltaStateExpired()

@@ -88,9 +88,10 @@ void GraphFetchFoldersJob::onRequestFinished(KJob *job)
 {
     auto *req = qobject_cast<GraphRequest *>(job);
     if (job->error()) {
-        if (req->httpStatus() == 410 && mIncremental) {
-            // The stored delta token expired (HTTP 410 Gone) — fall back to a full
-            // folder tree sync, which also produces a fresh deltaLink.
+        if (req->deltaStateExpired() && mIncremental) {
+            // The stored delta token expired (HTTP 410 Gone, or a 400 such as
+            // ErrorInvalidSyncStateData) — fall back to a full folder tree sync, which
+            // also produces a fresh deltaLink.
             mDeltaLink.clear();
             mIncremental = false;
             mAll.clear();

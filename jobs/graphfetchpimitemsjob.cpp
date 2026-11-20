@@ -101,7 +101,7 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
 {
     auto *req = qobject_cast<GraphRequest *>(job);
     if (job->error()) {
-        if ((req->httpStatus() == 410 || req->graphErrorCode() == QLatin1String("ErrorInvalidSyncStateData")) && !mDeltaLink.isEmpty()) {
+        if (req->deltaStateExpired() && !mDeltaLink.isEmpty()) {
             // The stored delta token expired (HTTP 410 Gone) or the server no longer
             // accepts its state (HTTP 400 ErrorInvalidSyncStateData) — drop it and
             // rerun the delta from scratch. That round is a full listing: an initial

@@ -402,6 +402,15 @@ GraphRequest::Failure GraphRequest::failure() const
     }
 }
 
+bool GraphRequest::deltaStateExpired() const
+{
+    if (!error()) {
+        return false;
+    }
+    return mHttpStatus == 410 || mGraphErrorCode.contains(QLatin1String("syncstate"), Qt::CaseInsensitive)
+        || mGraphErrorCode.contains(QLatin1String("resync"), Qt::CaseInsensitive);
+}
+
 bool GraphRequest::authenticationRejected() const
 {
     return error() && (mNotAuthenticated || mHttpStatus == 401);

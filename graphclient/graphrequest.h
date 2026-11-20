@@ -74,6 +74,10 @@ public:
     [[nodiscard]] Failure failure() const;
     /// No token, or the server rejected it (HTTP 401).
     [[nodiscard]] bool authenticationRejected() const;
+    /// The server no longer takes the delta state the request carried: 410 Gone, or an
+    /// error code that says so (ErrorInvalidSyncStateData, syncStateNotFound,
+    /// resyncRequired, ...). The delta has to start over without it.
+    [[nodiscard]] bool deltaStateExpired() const;
 
     // Shared with GraphBatchJob, which builds the same requests as /$batch entries.
     /// Whether a request to @p path asks for immutable ids (not in Microsoft To Do).
