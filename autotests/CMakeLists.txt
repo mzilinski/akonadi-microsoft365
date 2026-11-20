@@ -41,3 +41,12 @@ add_graph_test(graphbatchjobtest graphbatchjobtest.cpp ../jobs/graphbatchjob.cpp
 add_graph_test(graphfetchitemsjobtest graphfetchitemsjobtest.cpp ../jobs/graphfetchitemsjob.cpp ../jobs/graphbatchjob.cpp)
 add_graph_test(graphretrypolicytest graphretrypolicytest.cpp)
 add_graph_test(graphoauthtest graphoauthtest.cpp)
+add_graph_test(graphrequesttest graphrequesttest.cpp)
+add_graph_test(
+    graphfetchpimitemsjobtest
+    graphfetchpimitemsjobtest.cpp
+    ../jobs/graphfetchpimitemsjob.cpp
+    ../calendar/grapheventhandler.cpp
+    ../contact/graphcontacthandler.cpp
+    ../todo/graphtodohandler.cpp
+)

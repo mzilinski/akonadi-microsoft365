@@ -83,6 +83,7 @@ private:
     void onReplyFinished();
     void issue(const QUrl &url);
     void scheduleRetry(int seconds, const QUrl &url); // 429 backoff
+    void failUnreadable(int httpStatus);
 
     GraphClient &mClient;
     Method mMethod = Method::Get;
@@ -102,4 +103,5 @@ private:
     int mHttpStatus = 0;
     QNetworkReply::NetworkError mNetworkError = QNetworkReply::NoError; // of the last reply
     bool mNotAuthenticated = false;
+    bool mFollowingNextLink = false; // the current reply is a page a nextLink led to
 };

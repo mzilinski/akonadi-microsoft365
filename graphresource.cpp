@@ -981,6 +981,12 @@ void GraphResource::fetchPimItemsJobFinished(KJob *job, quint64 generation)
     auto *fj = qobject_cast<GraphFetchPimItemsJob *>(job);
     qCDebug(GRAPH_LOG) << "pim delta" << fj->collection().name() << "changed:" << fj->changedItems().size() << "removed:" << fj->removedItems().size()
                        << "deltaLink:" << (fj->deltaLink().isEmpty() ? "none" : "present");
+    if (fj->isFullListing()) {
+        // A first round, or one after the delta state was lost: it carries no
+        // tombstones, so what was deleted on the server meanwhile goes by its absence.
+        syncItemsFull(fj->collection(), fj->changedItems(), fj->deltaLink(), generation);
+        return;
+    }
     deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink(), generation);
 }
 
@@ -1498,8 +1504,14 @@ void GraphResource::postPimItem(const Akonadi::Item &item, const QString &path, 
             failChange(replay, job->errorText());
             return;
         }
+        const QString newId = req->responseObject().value(QLatin1String("id")).toString();
+        if (newId.isEmpty()) {
+            // Without an id the item could never be changed or deleted on the server.
+            failChange(replay, i18n("Microsoft 365 created the item but did not say under which id"));
+            return;
+        }
         Item newItem(item);
-        newItem.setRemoteId(req->responseObject().value(QLatin1String("id")).toString());
+        newItem.setRemoteId(newId);
         putContactPhotoThenCommit(newItem, replay);
     });
     req->start();
@@ -1554,6 +1566,12 @@ void GraphResource::movePimItem(const Item::List &items,
             return;
         }
         const QString newId = create->responseObject().value(QLatin1String("id")).toString();
+        if (newId.isEmpty()) {
+            // Deleting the original now would leave the item on no calendar or list
+            // this resource can address.
+            failChange(replay, i18n("Microsoft 365 created the copy but did not say under which id; the original was kept"));
+            return;
+        }
         auto del = new GraphRequest(mClient, this);
         del->setMethod(GraphRequest::Method::Delete);
         del->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(source.remoteId(), item.remoteId())
@@ -1996,6 +2014,10 @@ void GraphResource::sendMessage(const QString &id, const QByteArray &content)
             return;
         }
         const QString draftId = createReq->responseObject().value(QLatin1String("id")).toString();
+        if (draftId.isEmpty()) {
+            Q_EMIT messageSent(id, i18n("Microsoft 365 did not say under which id it stored the message; it was not sent"));
+            return;
+        }
         // 2. ...then send it.
         auto sendReq = new GraphRequest(mClient, this);
         sendReq->setMethod(GraphRequest::Method::Post);

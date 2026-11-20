@@ -31,6 +31,7 @@ GraphFetchPimItemsJob::GraphFetchPimItemsJob(GraphClient &client, const Collecti
 
 void GraphFetchPimItemsJob::start()
 {
+    mFullListing = mDeltaLink.isEmpty();
     if (!mDeltaLink.isEmpty()) {
         startDelta(mDeltaLink, true); // resume from stored deltaLink
         return;
@@ -103,7 +104,9 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
         if ((req->httpStatus() == 410 || req->graphErrorCode() == QLatin1String("ErrorInvalidSyncStateData")) && !mDeltaLink.isEmpty()) {
             // The stored delta token expired (HTTP 410 Gone) or the server no longer
             // accepts its state (HTTP 400 ErrorInvalidSyncStateData) — drop it and
-            // rerun the delta from scratch. Delivery is incremental, so this only re-lists.
+            // rerun the delta from scratch. That round is a full listing: an initial
+            // delta carries no tombstones, so what was deleted meanwhile is only
+            // noticed by its absence.
             mDeltaLink.clear();
             mChanged.clear();
             mRemoved.clear();
@@ -247,6 +250,11 @@ Item::List GraphFetchPimItemsJob::removedItems() const
 QString GraphFetchPimItemsJob::deltaLink() const
 {
     return mDeltaLink;
+}
+
+bool GraphFetchPimItemsJob::isFullListing() const
+{
+    return mFullListing;
 }
 
 #include "moc_graphfetchpimitemsjob.cpp"

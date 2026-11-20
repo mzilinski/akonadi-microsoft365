@@ -38,6 +38,9 @@ public:
     [[nodiscard]] Akonadi::Item::List changedItems() const;
     [[nodiscard]] Akonadi::Item::List removedItems() const;
     [[nodiscard]] QString deltaLink() const;
+    /// The round listed the whole collection (no usable deltaLink): what it did not
+    /// list is gone from the server, tombstones or not.
+    [[nodiscard]] bool isFullListing() const;
 
 private:
     void onDeltaFinished(KJob *);
@@ -49,6 +52,7 @@ private:
     Akonadi::Collection mCollection;
     Type mType = Type::Events;
     QString mDeltaLink;
+    bool mFullListing = false;
     Akonadi::Item::List mChanged;
     Akonadi::Item::List mRemoved;
     int mPhotoIndex = 0; // next contact whose photo has not been requested yet

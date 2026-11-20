@@ -176,8 +176,26 @@ void GraphRequest::onReplyFinished()
         return;
     }
 
+    // An empty body is fine (204, /send, a photo upload). Anything else must be a JSON
+    // object: read leniently, garbage became {}, so a broken page of a full listing
+    // looked like an empty folder (and deleted its local items) and a create like an
+    // item without id.
     const QByteArray data = reply->readAll();
-    const QJsonObject obj = QJsonDocument::fromJson(data).object();
+    QJsonObject obj;
+    if (!data.trimmed().isEmpty()) {
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+            failUnreadable(http);
+            return;
+        }
+        obj = doc.object();
+    }
+    // A page that a nextLink led to is part of a list and must say so.
+    if (mFollowingNextLink && !obj.value(QLatin1String("value")).isArray()) {
+        failUnreadable(http);
+        return;
+    }
 
     // --- list vs single object -------------------------------------------------
     if (obj.contains(QLatin1String("value"))) {
@@ -186,6 +204,7 @@ void GraphRequest::onReplyFinished()
         }
         // Delta/paging links.
         if (obj.contains(QLatin1String("@odata.nextLink"))) {
+            mFollowingNextLink = true;
             issue(QUrl(obj.value(QLatin1String("@odata.nextLink")).toString()));
             return; // keep aggregating
         }
@@ -196,6 +215,14 @@ void GraphRequest::onReplyFinished()
         mResponseObject = obj;
     }
 
+    emitResult();
+}
+
+void GraphRequest::failUnreadable(int httpStatus)
+{
+    // failure() counts it as Uncertain: the success status says the server acted.
+    setError(KJob::UserDefinedError);
+    setErrorText(i18n("Microsoft 365 sent an answer that could not be read (HTTP %1)", httpStatus));
     emitResult();
 }
 
