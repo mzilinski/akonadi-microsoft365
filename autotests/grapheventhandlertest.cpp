@@ -1178,6 +1178,69 @@ private Q_SLOTS:
         QVERIFY(event);
         QVERIFY(!GraphEventHandler::toJsonForUpdate(event).contains(QLatin1String("location")));
     }
+
+    // Review 2026-11, C2: cancelled and changed occurrences of a series.
+    static QJsonObject dailySeriesJson()
+    {
+        QJsonObject json;
+        json.insert(QStringLiteral("id"), QStringLiteral("MASTER"));
+        json.insert(QStringLiteral("iCalUId"), QStringLiteral("SERIES-UID"));
+        json.insert(QStringLiteral("type"), QStringLiteral("seriesMaster"));
+        json.insert(QStringLiteral("subject"), QStringLiteral("Daily"));
+        json.insert(QStringLiteral("start"), graphDateTime(QStringLiteral("2027-03-01T09:00:00.0000000")));
+        json.insert(QStringLiteral("end"), graphDateTime(QStringLiteral("2027-03-01T09:30:00.0000000")));
+        QJsonObject pattern{{QStringLiteral("type"), QStringLiteral("daily")}, {QStringLiteral("interval"), 1}};
+        QJsonObject range{{QStringLiteral("type"), QStringLiteral("numbered")},
+                          {QStringLiteral("startDate"), QStringLiteral("2027-03-01")},
+                          {QStringLiteral("numberOfOccurrences"), 5},
+                          {QStringLiteral("recurrenceTimeZone"), QStringLiteral("W. Europe Standard Time")}};
+        json.insert(QStringLiteral("recurrence"), QJsonObject{{QStringLiteral("pattern"), pattern}, {QStringLiteral("range"), range}});
+        json.insert(QStringLiteral("cancelledOccurrences"), QJsonArray{QStringLiteral("OID.MASTER.2027-03-04")});
+        return json;
+    }
+
+    void shouldReadCancelledOccurrencesAsExDates()
+    {
+        const Event::Ptr event = GraphEventHandler::toEvent(dailySeriesJson());
+        QVERIFY(event && event->recurs());
+        const QTimeZone berlin("Europe/Berlin");
+        // 09:00 UTC is 10:00 in Berlin, the zone the series repeats in.
+        const QDateTime cancelled(QDate(2027, 3, 4), QTime(10, 0), berlin);
+        QCOMPARE(event->recurrence()->exDateTimes(), QList<QDateTime>{cancelled});
+        QVERIFY(!event->recurrence()->recursAt(cancelled));
+        QVERIFY(event->recurrence()->recursAt(cancelled.addDays(1)));
+    }
+
+    void shouldMapAChangedOccurrenceToAnExceptionOfTheSeries()
+    {
+        const Event::Ptr master = GraphEventHandler::toEvent(dailySeriesJson());
+        QJsonObject json;
+        json.insert(QStringLiteral("id"), QStringLiteral("OCCURRENCE"));
+        json.insert(QStringLiteral("iCalUId"), QStringLiteral("ANOTHER-UID")); // Graph's own per occurrence
+        json.insert(QStringLiteral("type"), QStringLiteral("exception"));
+        json.insert(QStringLiteral("subject"), QStringLiteral("Daily, moved"));
+        json.insert(QStringLiteral("originalStart"), QStringLiteral("2027-03-02T09:00:00Z"));
+        json.insert(QStringLiteral("start"), graphDateTime(QStringLiteral("2027-03-02T13:00:00.0000000")));
+        json.insert(QStringLiteral("end"), graphDateTime(QStringLiteral("2027-03-02T13:30:00.0000000")));
+        const Event::Ptr exception = throughICal(GraphEventHandler::toException(json, master));
+        QVERIFY(exception);
+        QCOMPARE(exception->uid(), QStringLiteral("SERIES-UID"));
+        QCOMPARE(exception->recurrenceId(), QDateTime(QDate(2027, 3, 2), QTime(10, 0), QTimeZone("Europe/Berlin")));
+        QVERIFY(!exception->recurs());
+        QCOMPARE(exception->summary(), QStringLiteral("Daily, moved"));
+        // Changing it must not touch the recurrence of the series.
+        exception->setSummary(QStringLiteral("Daily, moved again"));
+        QVERIFY(!GraphEventHandler::toJsonForUpdate(exception).contains(QLatin1String("recurrence")));
+    }
+
+    void shouldTellOccurrencesNewlyExcludedInKde()
+    {
+        const Event::Ptr master = throughICal(GraphEventHandler::toEvent(dailySeriesJson()));
+        QVERIFY(master);
+        QVERIFY(GraphEventHandler::newlyCancelledDates(master).isEmpty());
+        master->recurrence()->addExDateTime(QDateTime(QDate(2027, 3, 5), QTime(10, 0), QTimeZone("Europe/Berlin")));
+        QCOMPARE(GraphEventHandler::newlyCancelledDates(master), QStringList{QStringLiteral("2027-03-05")});
+    }
 };
 
 QTEST_GUILESS_MAIN(GraphEventHandlerTest)

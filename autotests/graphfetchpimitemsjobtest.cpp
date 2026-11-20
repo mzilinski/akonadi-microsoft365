@@ -10,8 +10,10 @@
 #include "graphclient/graphclient.h"
 #include "scriptedgraphserver.h"
 
+#include <KCalendarCore/Incidence>
 #include <QSignalSpy>
 #include <QTest>
+#include <QTimeZone>
 
 using namespace Akonadi;
 
@@ -30,10 +32,12 @@ private:
         Item::List changed;
         QString deltaLink;
         QList<ScriptedGraphServer::Request> requests;
+        QHash<QString, QStringList> series;
     };
 
-    /// A task list delta; @p storedLink is appended to the server's address.
-    [[nodiscard]] Run run(QList<ScriptedGraphServer::Reply> replies, const QString &storedLink = {})
+    /// A task list delta (or @p type); @p storedLink is appended to the server's address.
+    [[nodiscard]] Run
+    run(QList<ScriptedGraphServer::Reply> replies, const QString &storedLink = {}, GraphFetchPimItemsJob::Type type = GraphFetchPimItemsJob::Type::Todos)
     {
         ScriptedGraphServer server(std::move(replies));
         GraphOAuth auth(QStringLiteral("tenant"), QStringLiteral("client"), QStringLiteral("wallet"));
@@ -43,7 +47,7 @@ private:
         Collection list(1);
         list.setRemoteId(QStringLiteral("list1"));
         const QString deltaLink = storedLink.isEmpty() ? QString() : server.baseUrl() + storedLink;
-        auto job = new GraphFetchPimItemsJob(client, list, GraphFetchPimItemsJob::Type::Todos, deltaLink, this);
+        auto job = new GraphFetchPimItemsJob(client, list, type, deltaLink, this);
         QSignalSpy spy(job, &KJob::result);
         job->start();
         Run r;
@@ -56,6 +60,7 @@ private:
         r.changed = job->changedItems();
         r.deltaLink = job->deltaLink();
         r.requests = server.requests();
+        r.series = job->seriesExceptions();
         return r;
     }
 
@@ -98,6 +103,60 @@ private Q_SLOTS:
         QCOMPARE(r.requests.size(), 2);
         QVERIFY(r.requests.at(1).target.startsWith("/me/todo/lists/list1/tasks/delta"));
         QVERIFY(r.deltaLink.endsWith(QLatin1String("token=2")));
+    }
+
+    // Review 2026-11, C2: the events delta lists series masters only; their changed
+    // occurrences are fetched through them and become exception items of the series.
+    void shouldFetchTheChangedOccurrencesOfASeries()
+    {
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"iCalUId\":\"SERIES-UID\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"numbered\",\"startDate\":\"2027-03-01\",\"numberOfOccurrences\":5,\"recurrenceTimeZone\":\"UTC\"}}},"
+            "{\"id\":\"SINGLE\",\"type\":\"singleInstance\",\"subject\":\"Once\","
+            "\"start\":{\"dateTime\":\"2027-03-01T12:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T13:00:00.0000000\",\"timeZone\":\"UTC\"}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const QByteArray ids =
+            QByteArrayLiteral("{\"responses\":[{\"id\":\"0\",\"status\":200,\"body\":{\"id\":\"MASTER\",\"exceptionOccurrences\":[{\"id\":\"OCC2\"}]}}]}");
+        const QByteArray occurrence = QByteArrayLiteral(
+            "{\"responses\":[{\"id\":\"0\",\"status\":200,\"body\":{\"id\":\"OCC2\",\"iCalUId\":\"OTHER\",\"type\":\"exception\","
+            "\"subject\":\"Daily, later\",\"originalStart\":\"2027-03-02T09:00:00Z\","
+            "\"start\":{\"dateTime\":\"2027-03-02T15:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-02T15:30:00.0000000\",\"timeZone\":\"UTC\"}}}]}");
+        const Run r = run({{200, delta}, {200, ids}, {200, occurrence}}, {}, GraphFetchPimItemsJob::Type::Events);
+        QCOMPARE(r.error, 0);
+        QCOMPARE(r.changed.size(), 3);
+        const Item &exception = r.changed.at(2);
+        QCOMPARE(exception.remoteId(), QStringLiteral("OCC2"));
+        QCOMPARE(exception.remoteRevision(), GraphFetchPimItemsJob::exceptionRevision(QStringLiteral("MASTER")));
+        const auto incidence = exception.payload<KCalendarCore::Incidence::Ptr>();
+        QCOMPARE(incidence->uid(), QStringLiteral("SERIES-UID"));
+        QCOMPARE(incidence->recurrenceId(), QDateTime(QDate(2027, 3, 2), QTime(9, 0), QTimeZone::utc()));
+        QCOMPARE(r.series.value(QStringLiteral("MASTER")), QStringList{QStringLiteral("OCC2")});
+        // Only the series was asked about.
+        QVERIFY(r.requests.at(1).body.contains("/me/events/MASTER?$select=id&$expand=exceptionOccurrences"));
+        QVERIFY(!r.requests.at(1).body.contains("SINGLE"));
+    }
+
+    void shouldListASeriesWithoutChangedOccurrences()
+    {
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const QByteArray ids = QByteArrayLiteral("{\"responses\":[{\"id\":\"0\",\"status\":200,\"body\":{\"id\":\"MASTER\",\"exceptionOccurrences\":[]}}]}");
+        const Run r = run({{200, delta}, {200, ids}}, QStringLiteral("/delta?token=1"), GraphFetchPimItemsJob::Type::Events);
+        QCOMPARE(r.error, 0);
+        QCOMPARE(r.changed.size(), 1);
+        // An empty list, not none: local exception items of this series are stale.
+        QVERIFY(r.series.contains(QStringLiteral("MASTER")));
+        QVERIFY(r.series.value(QStringLiteral("MASTER")).isEmpty());
     }
 };
 

@@ -8,6 +8,7 @@
 #include "calendar/grapheventhandler.h"
 #include "contact/graphcontacthandler.h"
 #include "graphclient/graphrequest.h"
+#include "jobs/graphbatchjob.h"
 #include "todo/graphtodohandler.h"
 
 #include <KCalendarCore/Event>
@@ -19,6 +20,14 @@ using namespace Akonadi;
 
 // Delta change tracking rejects $top; page size is expressed via this header instead.
 static const QByteArray kMaxPageSize = QByteArrayLiteral("odata.maxpagesize=50");
+// The event fields mapped, for the delta and for the occurrences of a series alike.
+// The events delta lists single events and series masters only: a changed occurrence
+// (type "exception") is fetched through its master, which the delta reports whenever
+// one of its occurrences changes or is cancelled.
+static const QString kEventFields = QStringLiteral(
+    "id,iCalUId,subject,body,bodyPreview,isAllDay,start,end,location,"
+    "organizer,attendees,categories,showAs,sensitivity,recurrence,"
+    "originalStartTimeZone,originalEndTimeZone,type,seriesMasterId,originalStart,cancelledOccurrences");
 
 GraphFetchPimItemsJob::GraphFetchPimItemsJob(GraphClient &client, const Collection &collection, Type type, const QString &deltaLink, QObject *parent)
     : KJob(parent)
@@ -40,12 +49,7 @@ void GraphFetchPimItemsJob::start()
     case Type::Events:
         // The events delta returns only a minimal default field set; $select pulls the
         // fields we map. The returned deltaLink preserves this selection.
-        startDelta(QStringLiteral("/me/calendars/%1/events/delta"
-                                  "?$select=id,iCalUId,subject,body,bodyPreview,isAllDay,start,end,location,"
-                                  "organizer,attendees,categories,showAs,sensitivity,recurrence,"
-                                  "originalStartTimeZone,originalEndTimeZone")
-                       .arg(mCollection.remoteId()),
-                   false);
+        startDelta(QStringLiteral("/me/calendars/%1/events/delta?$select=%2").arg(mCollection.remoteId(), kEventFields), false);
         break;
     case Type::Todos:
         startDelta(QStringLiteral("/me/todo/lists/%1/tasks/delta").arg(mCollection.remoteId()), false);
@@ -110,6 +114,8 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             mDeltaLink.clear();
             mChanged.clear();
             mRemoved.clear();
+            mMasters.clear();
+            mSeriesExceptions.clear();
             start();
             return;
         }
@@ -143,6 +149,9 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             item.setParentCollection(mCollection);
             item.setPayload<KCalendarCore::Incidence::Ptr>(event);
             mChanged.append(item);
+            if (obj.value(QLatin1String("type")).toString() == QLatin1String("seriesMaster")) {
+                mMasters.insert(id, event);
+            }
             break;
         }
         case Type::Todos: {
@@ -171,7 +180,105 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
         fetchPhotos(); // photos are a separate endpoint, not part of the contact JSON
         return;
     }
+    if (mType == Type::Events && !mMasters.isEmpty()) {
+        fetchExceptionIds();
+        return;
+    }
     emitResult();
+}
+
+void GraphFetchPimItemsJob::fetchExceptionIds()
+{
+    // $expand=exceptionOccurrences names the changed occurrences of a series (ids
+    // only, whatever is selected); their fields need a request of their own.
+    const QStringList masters = mMasters.keys();
+    QList<GraphBatchJob::Call> calls;
+    calls.reserve(masters.size());
+    for (const QString &id : masters) {
+        calls.append({GraphRequest::Method::Get, QStringLiteral("/me/events/%1?$select=id&$expand=exceptionOccurrences").arg(id), {}});
+    }
+    auto batch = new GraphBatchJob(mClient, calls, this);
+    batch->setIgnoreNotFound(true); // a series deleted meanwhile: its tombstone follows
+    connect(batch, &KJob::result, this, [this, batch, masters](KJob *job) {
+        if (job->error()) {
+            setError(job->error());
+            setErrorText(job->errorText());
+            emitResult();
+            return;
+        }
+        QList<QPair<QString, QString>> exceptions;
+        const QList<QJsonObject> responses = batch->responses();
+        for (int i = 0; i < masters.size(); ++i) {
+            const QJsonObject master = responses.value(i);
+            if (master.isEmpty()) {
+                continue; // gone: no statement about its occurrences
+            }
+            QStringList ids;
+            const QJsonArray occurrences = master.value(QLatin1String("exceptionOccurrences")).toArray();
+            for (const auto &o : occurrences) {
+                const QString id = o.toObject().value(QLatin1String("id")).toString();
+                if (!id.isEmpty()) {
+                    ids << id;
+                    exceptions.append({masters.at(i), id});
+                }
+            }
+            mSeriesExceptions.insert(masters.at(i), ids);
+        }
+        if (exceptions.isEmpty()) {
+            emitResult();
+            return;
+        }
+        fetchExceptions(exceptions);
+    });
+    batch->start();
+}
+
+void GraphFetchPimItemsJob::fetchExceptions(const QList<QPair<QString, QString>> &exceptions)
+{
+    QList<GraphBatchJob::Call> calls;
+    calls.reserve(exceptions.size());
+    for (const auto &[master, id] : exceptions) {
+        calls.append({GraphRequest::Method::Get, QStringLiteral("/me/events/%1?$select=%2").arg(id, kEventFields), {}});
+    }
+    auto batch = new GraphBatchJob(mClient, calls, this);
+    batch->setIgnoreNotFound(true);
+    connect(batch, &KJob::result, this, [this, batch, exceptions](KJob *job) {
+        if (job->error()) {
+            setError(job->error());
+            setErrorText(job->errorText());
+            emitResult();
+            return;
+        }
+        const QList<QJsonObject> responses = batch->responses();
+        for (int i = 0; i < exceptions.size(); ++i) {
+            const auto &[masterId, id] = exceptions.at(i);
+            const auto event = GraphEventHandler::toException(responses.value(i), mMasters.value(masterId));
+            if (!event) {
+                // Gone since it was listed (no body), or unreadable: dropped from the
+                // list, so that a local copy goes too.
+                mSeriesExceptions[masterId].removeAll(id);
+                continue;
+            }
+            Item item(GraphEventHandler::mimeType());
+            item.setRemoteId(id);
+            item.setRemoteRevision(exceptionRevision(masterId));
+            item.setParentCollection(mCollection);
+            item.setPayload<KCalendarCore::Incidence::Ptr>(event);
+            mChanged.append(item);
+        }
+        emitResult();
+    });
+    batch->start();
+}
+
+QHash<QString, QStringList> GraphFetchPimItemsJob::seriesExceptions() const
+{
+    return mSeriesExceptions;
+}
+
+QString GraphFetchPimItemsJob::exceptionRevision(const QString &masterId)
+{
+    return QStringLiteral("series:") + masterId;
 }
 
 void GraphFetchPimItemsJob::fetchPhotos()

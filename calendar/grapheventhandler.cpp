@@ -50,6 +50,10 @@ constexpr QByteArrayView kServerShowAs("SERVER-SHOW-AS");
 // Set when the server named a location (X-KDE-GRAPH-SERVER-LOCATION): only then does
 // an empty location on an update clear it there.
 constexpr QByteArrayView kServerLocation("SERVER-LOCATION");
+// The dates of the occurrences the server had cancelled when the series was read
+// (X-KDE-GRAPH-SERVER-CANCELLED, ISO dates joined by commas). An EXDATE added in KDE
+// that is not among them is an occurrence to cancel on the server.
+constexpr QByteArrayView kServerCancelled("SERVER-CANCELLED");
 
 [[nodiscard]] QString bodyFingerprint(const Incidence::Ptr &incidence)
 {
@@ -816,7 +820,73 @@ KCalendarCore::Event::Ptr toEvent(const QJsonObject &json)
         }
     }
 
+    // Cancelled occurrences of a series: "OID.{seriesMasterId}.{yyyy-MM-dd}", the date of
+    // the occurrence that no longer takes place. KDE knows them as EXDATEs.
+    if (event->recurs()) {
+        QStringList cancelled;
+        const QJsonArray occurrences = json.value(QLatin1String("cancelledOccurrences")).toArray();
+        for (const auto &o : occurrences) {
+            const QDate date = QDate::fromString(o.toString().section(QLatin1Char('.'), -1), Qt::ISODate);
+            if (!date.isValid()) {
+                continue;
+            }
+            if (allDay) {
+                event->recurrence()->addExDate(date);
+            } else {
+                event->recurrence()->addExDateTime(QDateTime(date, event->dtStart().time(), event->dtStart().timeZone()));
+            }
+            cancelled << date.toString(Qt::ISODate);
+        }
+        if (!cancelled.isEmpty()) {
+            event->setCustomProperty(kCustomApp.toByteArray(), kServerCancelled.toByteArray(), cancelled.join(QLatin1Char(',')));
+        }
+    }
+
     return event;
+}
+
+KCalendarCore::Event::Ptr toException(const QJsonObject &json, const KCalendarCore::Event::Ptr &master)
+{
+    if (!master) {
+        return {};
+    }
+    QDateTime original = QDateTime::fromString(json.value(QLatin1String("originalStart")).toString(), Qt::ISODate);
+    auto event = toEvent(json);
+    if (!event || !original.isValid()) {
+        return {};
+    }
+    // Graph gives every occurrence an iCalUId of its own; KDE ties an exception to its
+    // series by the series' uid and the start the occurrence had (RECURRENCE-ID).
+    event->setUid(master->uid());
+    event->clearRecurrence();
+    event->removeCustomProperty(kCustomApp.toByteArray(), kKeepServerRecurrence.toByteArray());
+    original = original.toTimeZone(master->dtStart().timeZone());
+    if (master->allDay()) {
+        original = QDateTime(original.date(), QTime(0, 0));
+    }
+    event->setRecurrenceId(original);
+    return event;
+}
+
+QStringList newlyCancelledDates(const KCalendarCore::Event::Ptr &master)
+{
+    QStringList dates;
+    if (!master || !master->recurs()) {
+        return dates;
+    }
+    const QStringList known = master->customProperty(kCustomApp.toByteArray(), kServerCancelled.toByteArray()).split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const auto *recurrence = master->recurrence();
+    QList<QDate> excluded = recurrence->exDates();
+    for (const QDateTime &dt : recurrence->exDateTimes()) {
+        excluded << dt.toTimeZone(master->dtStart().timeZone()).date();
+    }
+    for (const QDate &date : std::as_const(excluded)) {
+        const QString iso = date.toString(Qt::ISODate);
+        if (!known.contains(iso) && !dates.contains(iso)) {
+            dates << iso;
+        }
+    }
+    return dates;
 }
 
 QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
@@ -884,6 +954,11 @@ QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
 QJsonObject toJsonForUpdate(const KCalendarCore::Event::Ptr &event)
 {
     QJsonObject json = toJson(event);
+    // One occurrence of a series has no recurrence of its own, and "recurrence": null
+    // is not something to send it.
+    if (event->hasRecurrenceId()) {
+        json.remove(QStringLiteral("recurrence"));
+    }
     // Only a description that differs from the one read goes back. Without a
     // fingerprint (cached before it existed) it counts as unchanged: the next
     // re-listing brings one, and until then the server's body is safe.

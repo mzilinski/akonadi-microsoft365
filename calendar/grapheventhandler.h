@@ -15,6 +15,7 @@
 #include <KCalendarCore/Event>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 #include <QTimeZone>
 
 namespace GraphEventHandler
@@ -22,8 +23,18 @@ namespace GraphEventHandler
 /// Akonadi item content mime type for calendar events.
 [[nodiscard]] QString mimeType();
 
-/// Graph event JSON -> KCalendarCore::Event (returns null on missing id).
+/// Graph event JSON -> KCalendarCore::Event (returns null on missing id). A series
+/// master's cancelledOccurrences become EXDATEs.
 [[nodiscard]] KCalendarCore::Event::Ptr toEvent(const QJsonObject &json);
+
+/// One changed occurrence of a series (Graph type "exception") -> an event with the
+/// series' uid and the occurrence's original start as RECURRENCE-ID, the way KDE
+/// keeps exceptions. Null without originalStart or master.
+[[nodiscard]] KCalendarCore::Event::Ptr toException(const QJsonObject &json, const KCalendarCore::Event::Ptr &master);
+
+/// Dates of occurrences excluded in KDE (EXDATE) that the server had not cancelled
+/// when the series was read: those to cancel there.
+[[nodiscard]] QStringList newlyCancelledDates(const KCalendarCore::Event::Ptr &master);
 
 /// KCalendarCore::Event -> Graph event JSON with every mapped field (for creating
 /// an event, also anew in another calendar).

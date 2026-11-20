@@ -159,11 +159,14 @@ private:
     // Incremental delivery with tombstones resolved against the local cache and the
     // deltaLink persisted only after the ItemSync committed (both via own ItemSync —
     // itemsRetrievedIncremental() cannot sequence the save after the commit).
+    // @p seriesExceptions: for the series masters of the round, the remote ids of
+    // their changed occurrences as they are now (see GraphFetchPimItemsJob).
     void deliverItemsIncremental(const Akonadi::Collection &collection,
                                  const Akonadi::Item::List &changed,
                                  const Akonadi::Item::List &removed,
                                  const QString &deltaLink,
-                                 quint64 generation);
+                                 quint64 generation,
+                                 const QHash<QString, QStringList> &seriesExceptions = {});
     void syncItemsIncremental(const Akonadi::Collection &collection,
                               const Akonadi::Item::List &changed,
                               const Akonadi::Item::List &removed,

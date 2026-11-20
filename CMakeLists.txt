@@ -227,6 +227,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
         contact/graphcontacthandler.cpp
         todo/graphtodohandler.cpp
         jobs/graphfetchpimitemsjob.cpp
+        jobs/graphbatchjob.cpp
         ${graph_common_SRCS}
     )
     target_link_libraries(

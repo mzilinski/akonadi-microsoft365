@@ -15,7 +15,10 @@
 
 #include <Akonadi/Collection>
 #include <Akonadi/Item>
+#include <KCalendarCore/Event>
 #include <KJob>
+#include <QHash>
+#include <QStringList>
 
 class GraphClient;
 
@@ -41,12 +44,21 @@ public:
     /// The round listed the whole collection (no usable deltaLink): what it did not
     /// list is gone from the server, tombstones or not.
     [[nodiscard]] bool isFullListing() const;
+    /// Events: for every series master of this round, the remote ids of its changed
+    /// occurrences as they are now (empty list: none). Local exception items of these
+    /// series that are not listed are gone; their items carry "series:" + the master's
+    /// id as remote revision.
+    [[nodiscard]] QHash<QString, QStringList> seriesExceptions() const;
+    /// Remote revision of the item of a changed occurrence of the series @p masterId.
+    [[nodiscard]] static QString exceptionRevision(const QString &masterId);
 
 private:
     void onDeltaFinished(KJob *);
     void startDelta(const QString &absoluteUrlOrPath, bool isAbsolute);
     void resolveContactsFolderThenStart();
     void fetchPhotos();
+    void fetchExceptionIds();
+    void fetchExceptions(const QList<QPair<QString, QString>> &exceptions); // (master id, exception id)
 
     GraphClient &mClient;
     Akonadi::Collection mCollection;
@@ -56,4 +68,6 @@ private:
     Akonadi::Item::List mChanged;
     Akonadi::Item::List mRemoved;
     int mPhotoIndex = 0; // next contact whose photo has not been requested yet
+    QHash<QString, KCalendarCore::Event::Ptr> mMasters; // series of this round, by id
+    QHash<QString, QStringList> mSeriesExceptions;
 };

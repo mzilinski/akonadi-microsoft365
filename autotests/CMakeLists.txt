@@ -46,6 +46,7 @@ add_graph_test(
     graphfetchpimitemsjobtest
     graphfetchpimitemsjobtest.cpp
     ../jobs/graphfetchpimitemsjob.cpp
+    ../jobs/graphbatchjob.cpp
     ../calendar/grapheventhandler.cpp
     ../contact/graphcontacthandler.cpp
     ../todo/graphtodohandler.cpp

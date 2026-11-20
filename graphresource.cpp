@@ -987,23 +987,24 @@ void GraphResource::fetchPimItemsJobFinished(KJob *job, quint64 generation)
         syncItemsFull(fj->collection(), fj->changedItems(), fj->deltaLink(), generation);
         return;
     }
-    deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink(), generation);
+    deliverItemsIncremental(fj->collection(), fj->changedItems(), fj->removedItems(), fj->deltaLink(), generation, fj->seriesExceptions());
 }
 
 void GraphResource::deliverItemsIncremental(const Collection &collection,
                                             const Item::List &changed,
                                             const Item::List &removed,
                                             const QString &deltaLink,
-                                            quint64 generation)
+                                            quint64 generation,
+                                            const QHash<QString, QStringList> &seriesExceptions)
 {
     // Deltas may tombstone items this cache never saw (removed server-side between two
     // polls, or emitted under a different id encoding by old Graph responses). ItemSync
     // aborts on such deletes, which would wedge the collection: the deltaLink is only
     // advanced after a successful commit, so the same tombstone would fail every poll.
-    if (!removed.isEmpty()) {
+    if (!removed.isEmpty() || !seriesExceptions.isEmpty()) {
         auto known = new ItemFetchJob(collection, this);
         known->fetchScope().setFetchModificationTime(false);
-        connect(known, &ItemFetchJob::result, this, [this, collection, changed, removed, deltaLink, known, generation](KJob *job) {
+        connect(known, &ItemFetchJob::result, this, [this, collection, changed, removed, deltaLink, known, generation, seriesExceptions](KJob *job) {
             if (isStale(generation)) {
                 return;
             }
@@ -1024,6 +1025,26 @@ void GraphResource::deliverItemsIncremental(const Collection &collection,
             }
             if (knownRemoved.size() != removed.size()) {
                 qCDebug(GRAPH_LOG) << "dropping" << removed.size() - knownRemoved.size() << "tombstones for items not in the local cache";
+            }
+            // Changed occurrences of a series are items of their own. They go when their
+            // series is deleted, or when the series no longer lists them (the occurrence
+            // was reset, cancelled or moved back).
+            QSet<QString> removedIds;
+            for (const Item &item : removed) {
+                removedIds.insert(item.remoteId());
+            }
+            const QString prefix = GraphFetchPimItemsJob::exceptionRevision(QString());
+            for (const Item &item : items) {
+                if (!item.remoteRevision().startsWith(prefix) || removedIds.contains(item.remoteId())) {
+                    continue;
+                }
+                const QString master = item.remoteRevision().mid(prefix.size());
+                const auto listed = seriesExceptions.constFind(master);
+                if (removedIds.contains(master) || (listed != seriesExceptions.cend() && !listed->contains(item.remoteId()))) {
+                    Item gone;
+                    gone.setRemoteId(item.remoteId());
+                    knownRemoved.append(gone);
+                }
             }
             syncItemsIncremental(collection, changed, knownRemoved, deltaLink, generation);
         });
