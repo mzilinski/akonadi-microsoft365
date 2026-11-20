@@ -1772,6 +1772,12 @@ void GraphResource::moveTask(const Item::List &items,
             return;
         }
         const QList<QJsonObject> responses = read->responses();
+        // A batch call is not paged further: a checklist or link list longer than one
+        // page would be copied cut short, and the original deleted.
+        if (responses.value(0).contains(QLatin1String("@odata.nextLink")) || responses.value(1).contains(QLatin1String("@odata.nextLink"))) {
+            refuseMove(items, index, moved, source, i18n("The task \"%1\" has too many checklist items or links to be moved safely.", todo->summary()), replay);
+            return;
+        }
         if (!responses.value(2).value(QLatin1String("value")).toArray().isEmpty()) {
             refuseMove(items,
                        index,
