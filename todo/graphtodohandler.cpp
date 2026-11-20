@@ -26,6 +26,9 @@ constexpr QByteArrayView kServerModified("SERVER-MODIFIED");
 // for waitingOnOthers and deferred; they go back as they were while the task is
 // neither completed nor in progress.
 constexpr QByteArrayView kServerStatus("SERVER-STATUS");
+// Set when the server had a plain-text body (X-KDE-GRAPH-SERVER-BODY): only then does
+// an empty description clear it there.
+constexpr QByteArrayView kServerBody("SERVER-BODY");
 
 // To Do keeps start and due as dates: it drops the time and takes the date in the zone
 // sent along. Its own clients write the user's local midnight, which Graph hands out
@@ -81,6 +84,9 @@ KCalendarCore::Todo::Ptr toTodo(const QJsonObject &json)
     const QJsonObject body = json.value(QLatin1String("body")).toObject();
     if (body.value(QLatin1String("contentType")).toString() == QLatin1String("text")) {
         todo->setDescription(body.value(QLatin1String("content")).toString());
+        if (!todo->description().isEmpty()) {
+            todo->setCustomProperty(kCustomApp.toByteArray(), kServerBody.toByteArray(), QStringLiteral("1"));
+        }
     }
 
     const QDate start = taskDate(json.value(QLatin1String("startDateTime")).toObject());
@@ -153,7 +159,9 @@ QJsonObject toJson(const KCalendarCore::Todo::Ptr &todo)
     // Only plain-text bodies are mapped (mirroring toTodo). Omit the body when there
     // is no local description so a server-side HTML body is not clobbered by an
     // empty text one.
-    if (!todo->description().isEmpty()) {
+    // A description removed in KDE clears a plain-text one the server had.
+    const bool cleared = todo->description().isEmpty() && !todo->customProperty(kCustomApp.toByteArray(), kServerBody.toByteArray()).isEmpty();
+    if (!todo->description().isEmpty() || cleared) {
         QJsonObject body;
         body.insert(QStringLiteral("contentType"), QStringLiteral("text"));
         body.insert(QStringLiteral("content"), todo->description());

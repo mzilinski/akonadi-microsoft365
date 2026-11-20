@@ -373,6 +373,21 @@ private Q_SLOTS:
         QVERIFY(!GraphTodoHandler::toJson(todo).contains(QLatin1String("startDateTime")));
     }
 
+    void shouldClearARemovedDescription()
+    {
+        QJsonObject json = serverTask();
+        json.insert(QStringLiteral("body"),
+                    QJsonObject{{QStringLiteral("contentType"), QStringLiteral("text")}, {QStringLiteral("content"), QStringLiteral("Notes")}});
+        const Todo::Ptr todo = GraphTodoHandler::toTodo(json);
+        QVERIFY(todo);
+        todo->setDescription(QString());
+        QCOMPARE(GraphTodoHandler::toJson(todo).value(QLatin1String("body")).toObject().value(QLatin1String("content")).toString(), QString());
+        QVERIFY(GraphTodoHandler::toJson(todo).contains(QLatin1String("body")));
+        // Nothing to clear when the server had no body.
+        const Todo::Ptr plain = GraphTodoHandler::toTodo(serverTask());
+        QVERIFY(!GraphTodoHandler::toJson(plain).contains(QLatin1String("body")));
+    }
+
     void shouldNotSendNullsForANewTask()
     {
         Todo::Ptr todo(new Todo);
