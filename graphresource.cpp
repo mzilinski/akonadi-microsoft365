@@ -1540,34 +1540,114 @@ void GraphResource::movePimItem(const Item::List &items,
         return;
     }
     const Item item = items.at(index);
-    const bool isTodo = item.mimeType() == GraphTodoHandler::mimeType();
-
-    QJsonObject body;
-    if (isTodo) {
-        const auto todo =
-            item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>() : nullptr;
-        if (!todo) {
-            failChange(replay, i18n("Cannot move task %1: no payload", item.remoteId()));
-            return;
-        }
-        body = GraphTodoHandler::toJsonForCreate(todo);
-    } else {
-        const auto event =
-            item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Event>() : nullptr;
-        if (!event) {
-            failChange(replay, i18n("Cannot move event %1: no payload", item.remoteId()));
-            return;
-        }
-        body = GraphEventHandler::toJson(event);
-        body.insert(QStringLiteral("transactionId"), eventTransactionId(item, destination));
+    if (item.mimeType() == GraphTodoHandler::mimeType()) {
+        moveTask(items, index, moved, source, destination, replay);
+        return;
     }
+    const auto event =
+        item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Event>() : nullptr;
+    if (!event) {
+        failChange(replay, i18n("Cannot move event %1: no payload", item.remoteId()));
+        return;
+    }
+    if (!event->attendees().isEmpty()) {
+        // The copy would be a new meeting, and deleting the original sends every
+        // attendee a cancellation (as the organizer) or a decline (as an attendee).
+        failChange(replay,
+                   i18n("The meeting \"%1\" cannot be moved to another calendar: Microsoft 365 cannot move events, and removing the original "
+                        "would send its attendees a cancellation.",
+                        event->summary()));
+        return;
+    }
+    QJsonObject body = GraphEventHandler::toJson(event);
+    body.insert(QStringLiteral("transactionId"), eventTransactionId(item, destination));
+    createMovedCopy(items, index, moved, source, destination, QStringLiteral("/me/calendars/%1/events").arg(destination.remoteId()), body, {}, replay);
+}
 
+void GraphResource::moveTask(const Item::List &items,
+                             int index,
+                             const std::shared_ptr<Item::List> &moved,
+                             const Collection &source,
+                             const Collection &destination,
+                             const Replay &replay)
+{
+    const Item item = items.at(index);
+    const auto todo =
+        item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Todo>() : nullptr;
+    if (!todo) {
+        failChange(replay, i18n("Cannot move task %1: no payload", item.remoteId()));
+        return;
+    }
+    // What a task holds besides its own fields, which the recreated task must get too.
+    const QString original = QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(source.remoteId(), item.remoteId());
+    auto read = new GraphBatchJob(mClient,
+                                  {{GraphRequest::Method::Get, original + QStringLiteral("/checklistItems"), {}},
+                                   {GraphRequest::Method::Get, original + QStringLiteral("/linkedResources"), {}},
+                                   {GraphRequest::Method::Get, original + QStringLiteral("/attachments"), {}}},
+                                  this);
+    connect(read, &KJob::result, this, [this, read, items, index, moved, source, destination, todo, replay](KJob *job) {
+        if (retryLater(job, replay, true, index > 0)) {
+            return;
+        }
+        if (job->error()) {
+            failChange(replay, job->errorText());
+            return;
+        }
+        const QList<QJsonObject> responses = read->responses();
+        if (!responses.value(2).value(QLatin1String("value")).toArray().isEmpty()) {
+            failChange(replay,
+                       i18n("The task \"%1\" cannot be moved to another list: Microsoft 365 cannot move tasks, and its file attachments would be "
+                            "lost with the original.",
+                            todo->summary()));
+            return;
+        }
+        TaskParts parts;
+        const QJsonArray checklist = responses.value(0).value(QLatin1String("value")).toArray();
+        for (const auto &entry : checklist) {
+            const QJsonObject o = entry.toObject();
+            parts.append({QStringLiteral("/checklistItems"),
+                          QJsonObject{{QStringLiteral("displayName"), o.value(QLatin1String("displayName"))},
+                                      {QStringLiteral("isChecked"), o.value(QLatin1String("isChecked")).toBool()}}});
+        }
+        const QJsonArray links = responses.value(1).value(QLatin1String("value")).toArray();
+        for (const auto &entry : links) {
+            const QJsonObject o = entry.toObject();
+            QJsonObject link;
+            for (const auto key : {QLatin1String("webUrl"), QLatin1String("applicationName"), QLatin1String("displayName"), QLatin1String("externalId")}) {
+                if (!o.value(key).toString().isEmpty()) {
+                    link.insert(key, o.value(key));
+                }
+            }
+            parts.append({QStringLiteral("/linkedResources"), link});
+        }
+        createMovedCopy(items,
+                        index,
+                        moved,
+                        source,
+                        destination,
+                        QStringLiteral("/me/todo/lists/%1/tasks").arg(destination.remoteId()),
+                        GraphTodoHandler::toJsonForCreate(todo),
+                        parts,
+                        replay);
+    });
+    read->start();
+}
+
+void GraphResource::createMovedCopy(const Item::List &items,
+                                    int index,
+                                    const std::shared_ptr<Item::List> &moved,
+                                    const Collection &source,
+                                    const Collection &destination,
+                                    const QString &createPath,
+                                    const QJsonObject &body,
+                                    const TaskParts &parts,
+                                    const Replay &replay)
+{
     auto create = new GraphRequest(mClient, this);
     create->setMethod(GraphRequest::Method::Post);
-    create->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks").arg(destination.remoteId())
-                           : QStringLiteral("/me/calendars/%1/events").arg(destination.remoteId()));
+    create->setPath(createPath);
     create->setBody(body);
-    connect(create, &KJob::result, this, [this, create, items, index, moved, source, destination, item, isTodo, replay](KJob *job) {
+    connect(create, &KJob::result, this, [this, create, items, index, moved, source, destination, createPath, parts, replay](KJob *job) {
         // From the second item on, the first ones already exist in the destination.
         if (retryLater(job, replay, false, index > 0)) {
             return;
@@ -1583,25 +1663,64 @@ void GraphResource::movePimItem(const Item::List &items,
             failChange(replay, i18n("Microsoft 365 created the copy but did not say under which id; the original was kept"));
             return;
         }
-        auto del = new GraphRequest(mClient, this);
-        del->setMethod(GraphRequest::Method::Delete);
-        del->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(source.remoteId(), item.remoteId())
-                            : QStringLiteral("/me/events/%1").arg(item.remoteId()));
-        connect(del, &KJob::result, this, [this, del, items, index, moved, source, destination, item, newId, replay](KJob *dj) {
-            if (dj->error() && del->httpStatus() != 404) {
-                failChange(replay, dj->errorText());
+        if (parts.isEmpty()) {
+            deleteMovedOriginal(items, index, moved, source, destination, newId, replay);
+            return;
+        }
+        const QString copy = createPath + QLatin1Char('/') + newId;
+        QList<GraphBatchJob::Call> calls;
+        calls.reserve(parts.size());
+        for (const auto &[path, partBody] : parts) {
+            calls.append({GraphRequest::Method::Post, copy + path, partBody});
+        }
+        auto add = new GraphBatchJob(mClient, calls, this);
+        connect(add, &KJob::result, this, [this, items, index, moved, source, destination, copy, newId, replay](KJob *job) {
+            if (!job->error()) {
+                deleteMovedOriginal(items, index, moved, source, destination, newId, replay);
                 return;
             }
-            Item movedItem(item);
-            if (!newId.isEmpty()) {
-                movedItem.setRemoteId(newId);
-            }
-            moved->append(movedItem);
-            movePimItem(items, index + 1, moved, source, destination, replay);
+            // An incomplete copy is removed again; the original stays as it was.
+            auto undo = new GraphRequest(mClient, this);
+            undo->setMethod(GraphRequest::Method::Delete);
+            undo->setPath(copy);
+            connect(undo, &KJob::result, this, [undo](KJob *uj) {
+                if (uj->error() && undo->httpStatus() != 404) {
+                    qCWarning(GRAPH_LOG) << "could not remove the incomplete copy of a moved task:" << uj->errorText();
+                }
+            });
+            undo->start();
+            failChange(replay, i18n("The task could not be copied in full (%1); the original was kept", job->errorText()));
         });
-        del->start();
+        add->start();
     });
     create->start();
+}
+
+void GraphResource::deleteMovedOriginal(const Item::List &items,
+                                        int index,
+                                        const std::shared_ptr<Item::List> &moved,
+                                        const Collection &source,
+                                        const Collection &destination,
+                                        const QString &newId,
+                                        const Replay &replay)
+{
+    const Item item = items.at(index);
+    const bool isTodo = item.mimeType() == GraphTodoHandler::mimeType();
+    auto del = new GraphRequest(mClient, this);
+    del->setMethod(GraphRequest::Method::Delete);
+    del->setPath(isTodo ? QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(source.remoteId(), item.remoteId())
+                        : QStringLiteral("/me/events/%1").arg(item.remoteId()));
+    connect(del, &KJob::result, this, [this, del, items, index, moved, source, destination, item, newId, replay](KJob *dj) {
+        if (dj->error() && del->httpStatus() != 404) {
+            failChange(replay, dj->errorText());
+            return;
+        }
+        Item movedItem(item);
+        movedItem.setRemoteId(newId);
+        moved->append(movedItem);
+        movePimItem(items, index + 1, moved, source, destination, replay);
+    });
+    del->start();
 }
 
 void GraphResource::putContactPhotoThenCommit(const Akonadi::Item &item, const Replay &replay)
@@ -1685,8 +1804,8 @@ void GraphResource::itemsMoved(const Item::List &items, const Collection &source
     const QString mime = items.isEmpty() ? QString() : items.constFirst().mimeType();
     if (mime == GraphEventHandler::mimeType() || mime == GraphTodoHandler::mimeType()) {
         // Graph has no move API for events or tasks — recreate in the destination and
-        // delete the original (Outlook on the web does the same). Attendees are not
-        // part of the write mapping, so recreating never sends out invitations.
+        // delete the original. Meetings with attendees are refused (deleting the
+        // original would send cancellations); a task takes its checklist and links.
         movePimItem(items, 0, std::make_shared<Item::List>(), source, destination, replay);
         return;
     }

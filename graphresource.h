@@ -236,6 +236,33 @@ private:
                      const Akonadi::Collection &source,
                      const Akonadi::Collection &destination,
                      const Replay &replay);
+    // A task's checklist items and linked resources, read before it is recreated:
+    // (path below the new task, body to POST there).
+    using TaskParts = QList<QPair<QString, QJsonObject>>;
+    void moveTask(const Akonadi::Item::List &items,
+                  int index,
+                  const std::shared_ptr<Akonadi::Item::List> &moved,
+                  const Akonadi::Collection &source,
+                  const Akonadi::Collection &destination,
+                  const Replay &replay);
+    // Creates the copy at @p createPath, adds @p parts to it, and deletes the original
+    // only once the copy is complete.
+    void createMovedCopy(const Akonadi::Item::List &items,
+                         int index,
+                         const std::shared_ptr<Akonadi::Item::List> &moved,
+                         const Akonadi::Collection &source,
+                         const Akonadi::Collection &destination,
+                         const QString &createPath,
+                         const QJsonObject &body,
+                         const TaskParts &parts,
+                         const Replay &replay);
+    void deleteMovedOriginal(const Akonadi::Item::List &items,
+                             int index,
+                             const std::shared_ptr<Akonadi::Item::List> &moved,
+                             const Akonadi::Collection &source,
+                             const Akonadi::Collection &destination,
+                             const QString &newId,
+                             const Replay &replay);
 
     // Per-collection delta state (the @odata.deltaLink) is stored as a collection
     // attribute, exactly like EwsSyncStateAttribute, tagged with the mapping version
