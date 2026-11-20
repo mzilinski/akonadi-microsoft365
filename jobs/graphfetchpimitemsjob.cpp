@@ -28,7 +28,8 @@ static const QByteArray kMaxPageSize = QByteArrayLiteral("odata.maxpagesize=50")
 static const QString kEventFields = QStringLiteral(
     "id,iCalUId,subject,body,bodyPreview,isAllDay,start,end,location,"
     "organizer,attendees,categories,showAs,sensitivity,recurrence,"
-    "originalStartTimeZone,originalEndTimeZone,type,seriesMasterId,originalStart,cancelledOccurrences");
+    "originalStartTimeZone,originalEndTimeZone,type,seriesMasterId,originalStart,cancelledOccurrences,"
+    "isReminderOn,reminderMinutesBeforeStart");
 
 GraphFetchPimItemsJob::GraphFetchPimItemsJob(GraphClient &client, const Collection &collection, Type type, const QString &deltaLink, QObject *parent)
     : KJob(parent)

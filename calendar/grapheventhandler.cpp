@@ -7,6 +7,7 @@
 
 #include "graph_debug.h"
 
+#include <KCalendarCore/Alarm>
 #include <KCalendarCore/Attendee>
 #include <KCalendarCore/Person>
 #include <KCalendarCore/Recurrence>
@@ -54,6 +55,22 @@ constexpr QByteArrayView kServerLocation("SERVER-LOCATION");
 // (X-KDE-GRAPH-SERVER-CANCELLED, ISO dates joined by commas). An EXDATE added in KDE
 // that is not among them is an occurrence to cancel on the server.
 constexpr QByteArrayView kServerCancelled("SERVER-CANCELLED");
+// The reminder as read (X-KDE-GRAPH-SERVER-REMINDER): minutes before the start, or
+// "off". toJsonForUpdate() sends the reminder only when KDE's differs from it, so that
+// an event cached without reminders does not switch the server's off.
+constexpr QByteArrayView kServerReminder("SERVER-REMINDER");
+
+// The reminder of an event as Graph has it: minutes before the start, or -1 for none.
+[[nodiscard]] int reminderMinutes(const Incidence::Ptr &incidence)
+{
+    const auto alarms = incidence->alarms();
+    for (const Alarm::Ptr &alarm : alarms) {
+        if (alarm->enabled() && alarm->hasStartOffset() && alarm->startOffset().asSeconds() <= 0) {
+            return static_cast<int>(-alarm->startOffset().asSeconds() / 60);
+        }
+    }
+    return -1;
+}
 
 [[nodiscard]] QString bodyFingerprint(const Incidence::Ptr &incidence)
 {
@@ -824,6 +841,18 @@ KCalendarCore::Event::Ptr toEvent(const QJsonObject &json)
         }
     }
 
+    if (json.contains(QLatin1String("isReminderOn"))) {
+        const bool on = json.value(QLatin1String("isReminderOn")).toBool();
+        const int minutes = json.value(QLatin1String("reminderMinutesBeforeStart")).toInt();
+        if (on) {
+            Alarm::Ptr alarm = event->newAlarm();
+            alarm->setDisplayAlarm(event->summary());
+            alarm->setStartOffset(Duration(-minutes * 60));
+            alarm->setEnabled(true);
+        }
+        event->setCustomProperty(kCustomApp.toByteArray(), kServerReminder.toByteArray(), on ? QString::number(minutes) : QStringLiteral("off"));
+    }
+
     // Cancelled occurrences of a series: "OID.{seriesMasterId}.{yyyy-MM-dd}", the date of
     // the occurrence that no longer takes place. KDE knows them as EXDATEs.
     if (event->recurs()) {
@@ -933,6 +962,12 @@ QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
     }
     json.insert(QStringLiteral("showAs"), showAs);
 
+    const int minutes = reminderMinutes(event);
+    json.insert(QStringLiteral("isReminderOn"), minutes >= 0);
+    if (minutes >= 0) {
+        json.insert(QStringLiteral("reminderMinutesBeforeStart"), minutes);
+    }
+
     if (!event->recurs()) {
         // Explicitly, so that an update turns a series on the server into a single
         // event — unless the series may have been lost unasked (see above): then the
@@ -969,6 +1004,15 @@ QJsonObject toJsonForUpdate(const KCalendarCore::Event::Ptr &event)
     const QString read = event->customProperty(kCustomApp.toByteArray(), kServerBody.toByteArray());
     if (!read.isEmpty() && read == bodyFingerprint(event)) {
         json.remove(QStringLiteral("body"));
+    }
+    // The reminder only when it changed in KDE (or the server's is unknown and KDE
+    // has one): an event cached before reminders were read has none.
+    const QString readReminder = event->customProperty(kCustomApp.toByteArray(), kServerReminder.toByteArray());
+    const int minutes = reminderMinutes(event);
+    const QString localReminder = minutes >= 0 ? QString::number(minutes) : QStringLiteral("off");
+    if (readReminder == localReminder || (readReminder.isEmpty() && minutes < 0)) {
+        json.remove(QStringLiteral("isReminderOn"));
+        json.remove(QStringLiteral("reminderMinutesBeforeStart"));
     }
     // A location removed in KDE: toJson() leaves an empty one out.
     if (event->location().isEmpty() && !event->customProperty(kCustomApp.toByteArray(), kServerLocation.toByteArray()).isEmpty()) {

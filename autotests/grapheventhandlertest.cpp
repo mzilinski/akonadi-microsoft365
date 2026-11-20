@@ -1254,6 +1254,36 @@ private Q_SLOTS:
         master->recurrence()->addExDateTime(QDateTime(QDate(2027, 3, 5), QTime(10, 0), QTimeZone("Europe/Berlin")));
         QCOMPARE(GraphEventHandler::newlyCancelledDates(master), QStringList{QStringLiteral("2027-03-05")});
     }
+
+    // Review 2026-11, M6: reminders.
+    void shouldReadAndWriteTheReminder()
+    {
+        QJsonObject json = htmlEventJson();
+        json.insert(QStringLiteral("isReminderOn"), true);
+        json.insert(QStringLiteral("reminderMinutesBeforeStart"), 15);
+        const Event::Ptr event = throughICal(GraphEventHandler::toEvent(json));
+        QVERIFY(event);
+        QCOMPARE(event->alarms().size(), 1);
+        QCOMPARE(event->alarms().first()->startOffset().asSeconds(), -15 * 60);
+        // Unchanged: not sent back.
+        QVERIFY(!GraphEventHandler::toJsonForUpdate(event).contains(QLatin1String("isReminderOn")));
+        // Changed in KDE: sent.
+        event->alarms().first()->setStartOffset(KCalendarCore::Duration(-30 * 60));
+        const QJsonObject update = GraphEventHandler::toJsonForUpdate(event);
+        QCOMPARE(update.value(QLatin1String("isReminderOn")).toBool(), true);
+        QCOMPARE(update.value(QLatin1String("reminderMinutesBeforeStart")).toInt(), 30);
+        // Removed in KDE: switched off.
+        event->clearAlarms();
+        QCOMPARE(GraphEventHandler::toJsonForUpdate(event).value(QLatin1String("isReminderOn")).toBool(), false);
+    }
+
+    void shouldNotSwitchOffAReminderOfAnEventCachedWithoutOne()
+    {
+        // Read before reminders were mapped: no alarm, and nothing known of the server's.
+        const Event::Ptr event = throughICal(GraphEventHandler::toEvent(htmlEventJson()));
+        QVERIFY(event);
+        QVERIFY(!GraphEventHandler::toJsonForUpdate(event).contains(QLatin1String("isReminderOn")));
+    }
 };
 
 QTEST_GUILESS_MAIN(GraphEventHandlerTest)
