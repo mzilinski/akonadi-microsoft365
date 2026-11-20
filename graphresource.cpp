@@ -1768,7 +1768,9 @@ void GraphResource::moveTask(const Item::List &items,
                     link.insert(key, o.value(key));
                 }
             }
-            parts.append({QStringLiteral("/linkedResources"), link});
+            if (!link.isEmpty()) {
+                parts.append({QStringLiteral("/linkedResources"), link});
+            }
         }
         createMovedCopy(items,
                         index,

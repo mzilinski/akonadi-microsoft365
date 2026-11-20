@@ -66,6 +66,7 @@ void GraphFetchPimItemsJob::resolveContactsFolderThenStart()
     // any contact's parentFolderId, then start the folder-scoped delta.
     auto pre = new GraphRequest(mClient, this);
     pre->setPath(QStringLiteral("/me/contacts?$top=1&$select=id,parentFolderId"));
+    pre->setFollowNextLink(false); // one contact is all it takes, not one page per contact
     connect(pre, &KJob::result, this, [this, pre](KJob *job) {
         if (job->error()) {
             setError(job->error());
@@ -80,6 +81,9 @@ void GraphFetchPimItemsJob::resolveContactsFolderThenStart()
         }
         const QString folderId = values.first().toObject().value(QLatin1String("parentFolderId")).toString();
         if (folderId.isEmpty()) {
+            // Not "no contacts": a full listing without any would delete the local ones.
+            setError(KJob::UserDefinedError);
+            setErrorText(QStringLiteral("Microsoft 365 did not name the contacts folder"));
             emitResult();
             return;
         }
@@ -304,6 +308,7 @@ void GraphFetchPimItemsJob::fetchPhotos()
     req->setMethod(GraphRequest::Method::Post);
     req->setPath(QStringLiteral("/$batch"));
     req->setBody(body);
+    req->setRepeatable(true); // GETs only
     connect(req, &KJob::result, this, [this, req, last](KJob *job) {
         if (job->error()) {
             emitResult(); // photos are decoration: deliver the contacts without them

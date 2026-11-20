@@ -148,6 +148,41 @@ private Q_SLOTS:
         QVERIFY(r.requests.isEmpty());
     }
 
+    // Found in review: a tampered stored link failed every poll of its collection.
+    void shouldTakeAForeignStoredLinkForAnExpiredDeltaState()
+    {
+        ScriptedGraphServer server({});
+        GraphOAuth auth(QStringLiteral("tenant"), QStringLiteral("client"), QStringLiteral("wallet"));
+        GraphClient client;
+        client.setAuth(&auth);
+        client.setBaseUrl(server.baseUrl());
+        auto req = new GraphRequest(client, this);
+        req->setAbsoluteUrl(QUrl(QStringLiteral("https://graph.example.net/delta?token=1")));
+        QSignalSpy spy(req, &KJob::result);
+        req->start();
+        QVERIFY(spy.wait(10000));
+        QVERIFY(req->error() != 0);
+        QVERIFY(req->deltaStateExpired());
+    }
+
+    void shouldReadOnlyTheFirstPageWhenAsked()
+    {
+        ScriptedGraphServer server({{200, QByteArrayLiteral("{\"value\":[{\"id\":\"a\"}],\"@odata.nextLink\":\"{BASE}/page2\"}")}});
+        GraphOAuth auth(QStringLiteral("tenant"), QStringLiteral("client"), QStringLiteral("wallet"));
+        GraphClient client;
+        client.setAuth(&auth);
+        client.setBaseUrl(server.baseUrl());
+        auto req = new GraphRequest(client, this);
+        req->setPath(QStringLiteral("/me/contacts?$top=1"));
+        req->setFollowNextLink(false);
+        QSignalSpy spy(req, &KJob::result);
+        req->start();
+        QVERIFY(spy.wait(10000));
+        QCOMPARE(req->error(), 0);
+        QCOMPARE(req->aggregatedValue().size(), 1);
+        QCOMPARE(server.requests().size(), 1);
+    }
+
     void shouldStopAListThatLinksToItself()
     {
         const Run r = run({

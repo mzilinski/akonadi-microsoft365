@@ -55,6 +55,7 @@ void GraphFetchItemPayloadJob::fetchBatch()
     req->setMethod(GraphRequest::Method::Post);
     req->setPath(QStringLiteral("/$batch"));
     req->setBody(body);
+    req->setRepeatable(true); // GETs only
     connect(req, &KJob::result, this, [this, req, last](KJob *job) {
         if (job->error()) {
             setError(job->error());

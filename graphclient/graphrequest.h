@@ -61,6 +61,9 @@ public:
     /// Whether sending the request twice does no harm. Defaults to isRepeatable() of
     /// the method; a POST that only reads (a /$batch of GETs) may say so.
     void setRepeatable(bool repeatable);
+    /// Whether a list is read to its end through @odata.nextLink (the default), or only
+    /// its first page is wanted.
+    void setFollowNextLink(bool follow);
     [[nodiscard]] bool repeatable() const;
 
     void start() override;
@@ -128,4 +131,6 @@ private:
     bool mFollowingNextLink = false; // the current reply is a page a nextLink led to
     std::optional<bool> mRepeatable; // unset: by the method
     int mPages = 0; // pages read so far
+    bool mFollowNextLink = true;
+    bool mForeignStoredLink = false; // the stored link to start from was not Graph's
 };

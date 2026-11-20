@@ -66,6 +66,11 @@ void GraphRequest::setRepeatable(bool repeatable)
     mRepeatable = repeatable;
 }
 
+void GraphRequest::setFollowNextLink(bool follow)
+{
+    mFollowNextLink = follow;
+}
+
 bool GraphRequest::repeatable() const
 {
     return mRepeatable.value_or(isRepeatable(mMethod));
@@ -99,6 +104,9 @@ void GraphRequest::start()
     // A stored link (a delta link kept in a collection attribute, which any local
     // Akonadi client can rewrite) gets the token only on the server it belongs to.
     if (!isOwnServer(url, mClient.baseUrl())) {
+        // Counts as an expired delta state (deltaStateExpired()), so that the
+        // collection starts over instead of failing on the same link at every poll.
+        mForeignStoredLink = mAbsoluteUrl.isValid();
         failForeignLink();
         return;
     }
@@ -235,7 +243,7 @@ void GraphRequest::onReplyFinished()
             mAggregated.append(v);
         }
         // Delta/paging links.
-        if (obj.contains(QLatin1String("@odata.nextLink"))) {
+        if (mFollowNextLink && obj.contains(QLatin1String("@odata.nextLink"))) {
             const QUrl next(obj.value(QLatin1String("@odata.nextLink")).toString());
             if (!isOwnServer(next, mClient.baseUrl())) {
                 failForeignLink();
@@ -407,7 +415,7 @@ bool GraphRequest::deltaStateExpired() const
     if (!error()) {
         return false;
     }
-    return mHttpStatus == 410 || mGraphErrorCode.contains(QLatin1String("syncstate"), Qt::CaseInsensitive)
+    return mForeignStoredLink || mHttpStatus == 410 || mGraphErrorCode.contains(QLatin1String("syncstate"), Qt::CaseInsensitive)
         || mGraphErrorCode.contains(QLatin1String("resync"), Qt::CaseInsensitive);
 }
 
