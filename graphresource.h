@@ -274,6 +274,15 @@ private:
                          const QJsonObject &body,
                          const TaskParts &parts,
                          const Replay &replay);
+    // A move the server cannot carry out without harm: the items from @p index on go
+    // back to @p source locally (where the server still has them), the user is told
+    // why, and those moved before are committed.
+    void refuseMove(const Akonadi::Item::List &items,
+                    int index,
+                    const std::shared_ptr<Akonadi::Item::List> &moved,
+                    const Akonadi::Collection &source,
+                    const QString &message,
+                    const Replay &replay);
     void deleteMovedOriginal(const Akonadi::Item::List &items,
                              int index,
                              const std::shared_ptr<Akonadi::Item::List> &moved,

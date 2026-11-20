@@ -1703,10 +1703,14 @@ void GraphResource::movePimItem(const Item::List &items,
     if (!event->attendees().isEmpty()) {
         // The copy would be a new meeting, and deleting the original sends every
         // attendee a cancellation (as the organizer) or a decline (as an attendee).
-        failChange(replay,
+        refuseMove(items,
+                   index,
+                   moved,
+                   source,
                    i18n("The meeting \"%1\" cannot be moved to another calendar: Microsoft 365 cannot move events, and removing the original "
                         "would send its attendees a cancellation.",
-                        event->summary()));
+                        event->summary()),
+                   replay);
         return;
     }
     QJsonObject body = GraphEventHandler::toJson(event);
@@ -1745,10 +1749,14 @@ void GraphResource::moveTask(const Item::List &items,
         }
         const QList<QJsonObject> responses = read->responses();
         if (!responses.value(2).value(QLatin1String("value")).toArray().isEmpty()) {
-            failChange(replay,
+            refuseMove(items,
+                       index,
+                       moved,
+                       source,
                        i18n("The task \"%1\" cannot be moved to another list: Microsoft 365 cannot move tasks, and its file attachments would be "
                             "lost with the original.",
-                            todo->summary()));
+                            todo->summary()),
+                       replay);
             return;
         }
         TaskParts parts;
@@ -1846,6 +1854,34 @@ void GraphResource::createMovedCopy(const Item::List &items,
         add->start();
     });
     create->start();
+}
+
+void GraphResource::refuseMove(const Item::List &items,
+                               int index,
+                               const std::shared_ptr<Item::List> &moved,
+                               const Collection &source,
+                               const QString &message,
+                               const Replay &replay)
+{
+    // Failing the change would leave the items in the destination locally while the
+    // server keeps them in the source, which no incremental delta corrects. Put them
+    // back, keeping their remote ids; the resource's own session is not recorded for
+    // replay, so this does not come back as another move.
+    Q_EMIT error(message);
+    const Item::List rest = items.mid(index);
+    auto undo = new ItemMoveJob(rest, source, this);
+    trackWork(undo);
+    connect(undo, &KJob::result, this, [this, moved, rest, replay](KJob *undoJob) {
+        if (undoJob->error()) {
+            qCWarning(GRAPH_LOG) << "could not move" << rest.size() << "refused items back locally:" << undoJob->errorText();
+        }
+        if (moved->isEmpty()) {
+            skipChange(replay);
+        } else {
+            commitItems(replay, *moved);
+        }
+    });
+    undo->start();
 }
 
 void GraphResource::deleteMovedOriginal(const Item::List &items,
