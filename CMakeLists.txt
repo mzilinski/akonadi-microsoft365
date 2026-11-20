@@ -130,6 +130,7 @@ target_link_libraries(
 set(graphmtaresource_SRCS
     graphmtaresource.cpp
     graphmtaresource.h
+    mail/graphmailhandler.cpp
     ${graph_common_SRCS}
 )
 qt_add_dbus_interface(graphmtaresource_SRCS
@@ -147,6 +148,7 @@ target_link_libraries(
     akonadi_graphmta_resource
     KPim6::AkonadiAgentWidgetBase
     KPim6::AkonadiCore
+    KPim6::AkonadiMime
     KF6::Mime
     KF6::I18n
     Qt::DBus

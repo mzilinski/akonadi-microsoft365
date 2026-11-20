@@ -4,10 +4,12 @@
 */
 
 #include "graphmtaresource.h"
+#include "mail/graphmailhandler.h"
 
 #include "graph_debug.h"
 #include "graphresourceinterface.h"
 
+#include <Akonadi/AddressAttribute>
 #include <KConfigGroup>
 #include <KLocalizedString>
 #include <KMime/Message>
@@ -94,6 +96,12 @@ void GraphMtaResource::sendItem(const Akonadi::Item &item)
     // resource owns the outbox folder and may be empty (unlike in the EWS MTA).
     const QString id = QString::number(item.id());
     mItemHash.insert(id, item);
+
+    // Bcc recipients that only the envelope names (MailTransport keeps them in the
+    // item's AddressAttribute) would get nothing: Graph has no envelope.
+    if (const auto *addresses = item.attribute<Akonadi::AddressAttribute>()) {
+        GraphMailHandler::addMissingBcc(*msg, addresses->bcc());
+    }
 
     /* Exchange re-assembles the message from parsed MIME parts and mangles
      * quoted-printable bodies (KMail's preferred encoding) in the process.

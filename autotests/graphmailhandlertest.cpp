@@ -64,6 +64,26 @@ private Q_SLOTS:
         QCOMPARE(body.value(QLatin1String("flag")).toObject().value(QLatin1String("flagStatus")).toString(), QStringLiteral("flagged"));
     }
 
+    // Review 2026-11, M2: Graph sends raw MIME without an envelope; Bcc recipients
+    // that only the outbox item's AddressAttribute names would get nothing.
+    void shouldAddTheEnvelopeBccWhenTheMimeHasNone()
+    {
+        KMime::Message msg;
+        msg.to()->fromUnicodeString(QStringLiteral("to@example.org"));
+        GraphMailHandler::addMissingBcc(msg, {QStringLiteral("hidden@example.org"), QStringLiteral("Other <other@example.org>")});
+        QCOMPARE(msg.bcc()->addresses().size(), 2);
+        QVERIFY(msg.encodedContent().contains("hidden@example.org"));
+    }
+
+    void shouldKeepABccTheMimeAlreadyHas()
+    {
+        KMime::Message msg;
+        msg.bcc()->fromUnicodeString(QStringLiteral("kept@example.org"));
+        GraphMailHandler::addMissingBcc(msg, {QStringLiteral("hidden@example.org")});
+        QCOMPARE(msg.bcc()->addresses().size(), 1);
+        QCOMPARE(QString::fromLatin1(msg.bcc()->addresses().first()), QStringLiteral("kept@example.org"));
+    }
+
     void shouldSendNothingForFlagsGraphDoesNotKnow()
     {
         Item item;

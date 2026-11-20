@@ -29,6 +29,19 @@ QJsonObject flagPatchBody(const Akonadi::Item &item, const QSet<QByteArray> &cha
     return body;
 }
 
+void addMissingBcc(KMime::Message &message, const QStringList &bcc)
+{
+    if (bcc.isEmpty()) {
+        return;
+    }
+    const auto *existing = message.bcc(KMime::CreatePolicy::DontCreate);
+    if (existing && !existing->isEmpty()) {
+        return;
+    }
+    message.bcc()->fromUnicodeString(bcc.join(QStringLiteral(", ")));
+    message.assemble();
+}
+
 QPair<QByteArray, QByteArray> createFromMime(const Akonadi::Item &item)
 {
     if (!item.hasPayload<std::shared_ptr<KMime::Message>>()) {

@@ -13,6 +13,12 @@
 
 #include <Akonadi/Item>
 #include <QJsonObject>
+#include <QStringList>
+
+namespace KMime
+{
+class Message;
+}
 
 namespace GraphMailHandler
 {
@@ -28,6 +34,12 @@ namespace GraphMailHandler
 ///   POST /me/messages  with Content-Type: text/plain and base64(MIME)
 /// Returns (rawBody, contentType).
 [[nodiscard]] QPair<QByteArray, QByteArray> createFromMime(const Akonadi::Item &item);
+
+/// Puts the envelope's Bcc recipients (@p bcc, from the outbox item's AddressAttribute)
+/// into @p message when it carries no Bcc header of its own. Graph sends raw MIME
+/// with no envelope beside it: who is not named in the MIME gets nothing. Exchange
+/// drops the header from what the recipients receive.
+void addMissingBcc(KMime::Message &message, const QStringList &bcc);
 
 /// The Message-ID header of a raw MIME message, in the form KMime reports it for a
 /// parsed message ("<id@host>"); empty when the message has none.
