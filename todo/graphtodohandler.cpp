@@ -163,7 +163,9 @@ QJsonObject toJson(const KCalendarCore::Todo::Ptr &todo)
     // A date removed in KDE is cleared on the server with null; leaving it out kept it.
     if (todo->dtStart().isValid()) {
         json.insert(QStringLiteral("startDateTime"), taskDateToJson(todo->dtStart(), todo->allDay()));
-    } else {
+    } else if (!todo->recurs()) {
+        // (Not for a series: To Do takes null there as "start of the series" and
+        // moves the start date, as a live check showed.)
         json.insert(QStringLiteral("startDateTime"), QJsonValue::Null);
     }
     if (!todo->dtDue().isValid() && !todo->recurs()) {

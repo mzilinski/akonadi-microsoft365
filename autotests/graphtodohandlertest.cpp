@@ -360,6 +360,19 @@ private Q_SLOTS:
         QCOMPARE(json.value(QLatin1String("categories")).toArray(), QJsonArray());
     }
 
+    void shouldNotClearTheStartOfASeries()
+    {
+        // A series without a start date of its own: To Do would take a null start as
+        // "the start of the series" and move it (live check).
+        Todo::Ptr todo(new Todo);
+        todo->setSummary(QStringLiteral("Weekly"));
+        todo->setDtDue(QDateTime(QDate(2027, 3, 1), QTime(0, 0)), true);
+        todo->recurrence()->setWeekly(1);
+        QVERIFY(todo->recurs());
+        QVERIFY(!todo->dtStart().isValid());
+        QVERIFY(!GraphTodoHandler::toJson(todo).contains(QLatin1String("startDateTime")));
+    }
+
     void shouldNotSendNullsForANewTask()
     {
         Todo::Ptr todo(new Todo);
