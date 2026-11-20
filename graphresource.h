@@ -16,6 +16,7 @@
 
 #include "graphclient/graphclient.h"
 
+#include <KCalendarCore/Event>
 #include <QJsonObject>
 #include <QPointer>
 
@@ -231,6 +232,20 @@ private:
     };
     void patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body, const Replay &replay, const Patch &patch);
     void patchPimItem(const Akonadi::Item &item, const QString &path, const QJsonObject &body, const Replay &replay);
+    // Occurrences of a series. Graph keeps each one under an id of its own, found
+    // through the series' /instances by its original start.
+    // An exception made in KDE ("only this occurrence"): the occurrence is changed on
+    // the server instead of a new event being created.
+    void addOccurrenceChange(const Akonadi::Item &item, const Akonadi::Collection &collection, const KCalendarCore::Event::Ptr &event, const Replay &replay);
+    // The occurrences of @p masterId whose original start lies in [from, to).
+    void findOccurrences(const QString &masterId,
+                         const QDateTime &from,
+                         const QDateTime &to,
+                         const Replay &replay,
+                         const std::function<void(const QJsonArray &)> &found);
+    // EXDATEs added in KDE: deletes those occurrences on the server, then PATCHes the
+    // series itself.
+    void cancelOccurrences(const Akonadi::Item &item, const KCalendarCore::Event::Ptr &master, const QStringList &dates, int index, const Replay &replay);
     // Graph has no move API for events/tasks: recreate in the destination, delete the
     // original, then continue with the next item (sequential; commits when done).
     void movePimItem(const Akonadi::Item::List &items,

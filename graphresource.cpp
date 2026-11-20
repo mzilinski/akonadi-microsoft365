@@ -1271,6 +1271,13 @@ void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partId
         auto incidence = item.payload<KCalendarCore::Incidence::Ptr>();
         auto event = incidence.dynamicCast<KCalendarCore::Event>();
         if (event) {
+            const QStringList cancelled = GraphEventHandler::newlyCancelledDates(event);
+            if (!cancelled.isEmpty()) {
+                // KOrganizer's "delete this occurrence" adds an EXDATE, which Graph's
+                // recurrence cannot carry: the occurrence itself is deleted.
+                cancelOccurrences(item, event, cancelled, 0, replay);
+                return;
+            }
             patchPimItem(item, QStringLiteral("/me/events/%1").arg(item.remoteId()), GraphEventHandler::toJsonForUpdate(event), replay);
             return;
         }
@@ -1430,6 +1437,124 @@ void GraphResource::patchPimItem(const Akonadi::Item &item, const QString &path,
     req->start();
 }
 
+void GraphResource::findOccurrences(const QString &masterId,
+                                    const QDateTime &from,
+                                    const QDateTime &to,
+                                    const Replay &replay,
+                                    const std::function<void(const QJsonArray &)> &found)
+{
+    const auto stamp = [](const QDateTime &dt) {
+        return dt.toUTC().toString(QStringLiteral("yyyy-MM-ddTHH:mm:ssZ"));
+    };
+    auto req = new GraphRequest(mClient, this);
+    req->setPath(QStringLiteral("/me/events/%1/instances?startDateTime=%2&endDateTime=%3&$select=id,originalStart").arg(masterId, stamp(from), stamp(to)));
+    connect(req, &KJob::result, this, [this, req, replay, found](KJob *job) {
+        if (retryLater(job, replay, true, false)) {
+            return;
+        }
+        if (job->error()) {
+            failChange(replay, job->errorText());
+            return;
+        }
+        found(req->aggregatedValue());
+    });
+    req->start();
+}
+
+void GraphResource::addOccurrenceChange(const Item &item, const Collection &collection, const KCalendarCore::Event::Ptr &event, const Replay &replay)
+{
+    // The series is the item of the same uid without RECURRENCE-ID.
+    auto fetch = new ItemFetchJob(collection, this);
+    fetch->fetchScope().fetchFullPayload(true);
+    connect(fetch, &ItemFetchJob::result, this, [this, fetch, item, event, replay](KJob *job) {
+        if (job->error()) {
+            failChange(replay, job->errorText());
+            return;
+        }
+        QString masterId;
+        const auto items = fetch->items();
+        for (const Item &candidate : items) {
+            if (candidate.remoteId().isEmpty() || !candidate.hasPayload<KCalendarCore::Incidence::Ptr>()) {
+                continue;
+            }
+            const auto incidence = candidate.payload<KCalendarCore::Incidence::Ptr>();
+            if (incidence->uid() == event->uid() && !incidence->hasRecurrenceId()) {
+                masterId = candidate.remoteId();
+                break;
+            }
+        }
+        if (masterId.isEmpty()) {
+            failChange(replay, i18n("The series of this occurrence is not on the server yet; the change was not sent"));
+            return;
+        }
+        const QDateTime original = event->recurrenceId().toUTC();
+        findOccurrences(masterId,
+                        original.addDays(-1),
+                        original.addDays(1),
+                        replay,
+                        [this, item, event, masterId, original, replay](const QJsonArray &occurrences) {
+                            QString occurrenceId;
+                            for (const auto &o : occurrences) {
+                                const QJsonObject occurrence = o.toObject();
+                                if (QDateTime::fromString(occurrence.value(QLatin1String("originalStart")).toString(), Qt::ISODate) == original) {
+                                    occurrenceId = occurrence.value(QLatin1String("id")).toString();
+                                    break;
+                                }
+                            }
+                            if (occurrenceId.isEmpty()) {
+                                failChange(replay, i18n("This occurrence of the series was not found on the server; the change was not sent"));
+                                return;
+                            }
+                            Item occurrenceItem(item);
+                            occurrenceItem.setRemoteId(occurrenceId);
+                            occurrenceItem.setRemoteRevision(GraphFetchPimItemsJob::exceptionRevision(masterId));
+                            patchPimItem(occurrenceItem, QStringLiteral("/me/events/%1").arg(occurrenceId), GraphEventHandler::toJsonForUpdate(event), replay);
+                        });
+    });
+    fetch->start();
+}
+
+void GraphResource::cancelOccurrences(const Item &item, const KCalendarCore::Event::Ptr &master, const QStringList &dates, int index, const Replay &replay)
+{
+    if (index >= dates.size()) {
+        patchPimItem(item, QStringLiteral("/me/events/%1").arg(item.remoteId()), GraphEventHandler::toJsonForUpdate(master), replay);
+        return;
+    }
+    const QDate date = QDate::fromString(dates.at(index), Qt::ISODate);
+    const QTimeZone zone = master->dtStart().timeZone();
+    const QDateTime from(date, QTime(0, 0), zone);
+    findOccurrences(item.remoteId(), from, from.addDays(1), replay, [this, item, master, dates, index, date, zone, replay](const QJsonArray &occurrences) {
+        QString occurrenceId;
+        for (const auto &o : occurrences) {
+            const QJsonObject occurrence = o.toObject();
+            const QDateTime original = QDateTime::fromString(occurrence.value(QLatin1String("originalStart")).toString(), Qt::ISODate);
+            if (original.toTimeZone(zone).date() == date) {
+                occurrenceId = occurrence.value(QLatin1String("id")).toString();
+                break;
+            }
+        }
+        if (occurrenceId.isEmpty()) {
+            // Cancelled already (or never there): nothing to do for this date.
+            cancelOccurrences(item, master, dates, index + 1, replay);
+            return;
+        }
+        auto del = new GraphRequest(mClient, this);
+        del->setMethod(GraphRequest::Method::Delete);
+        del->setPath(QStringLiteral("/me/events/%1").arg(occurrenceId));
+        connect(del, &KJob::result, this, [this, del, item, master, dates, index, replay](KJob *job) {
+            if (del->httpStatus() != 404 && retryLater(job, replay, true, index > 0)) {
+                return;
+            }
+            if (job->error() && del->httpStatus() != 404) {
+                failChange(replay, job->errorText());
+                return;
+            }
+            cancelOccurrences(item, master, dates, index + 1, replay);
+        });
+        del->start();
+    });
+}
+
 void GraphResource::itemAdded(const Item &item, const Collection &collection)
 {
     qCDebug(GRAPH_LOG) << "replay: item added to" << collection.name() << item.mimeType();
@@ -1446,7 +1571,11 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
         } else if (item.hasPayload<KCalendarCore::Event::Ptr>()) {
             event = item.payload<KCalendarCore::Event::Ptr>();
         }
-        if (event) {
+        if (event && event->hasRecurrenceId()) {
+            // KOrganizer's "only this occurrence": the occurrence exists on the server
+            // already; creating an event would show it twice.
+            addOccurrenceChange(item, collection, event, replay);
+        } else if (event) {
             QJsonObject body = GraphEventHandler::toJson(event);
             body.insert(QStringLiteral("transactionId"), eventTransactionId(item, collection));
             postPimItem(item, QStringLiteral("/me/calendars/%1/events").arg(collection.remoteId()), body, true, replay);
