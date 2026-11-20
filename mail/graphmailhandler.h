@@ -18,8 +18,11 @@ namespace GraphMailHandler
 {
 [[nodiscard]] QString mimeType();
 
-/// Seen/Flagged -> PATCH body for /me/messages/{id}.
-[[nodiscard]] QJsonObject flagPatchBody(const Akonadi::Item &item);
+/// Seen/Flagged -> PATCH body for /me/messages/{id}, with only what @p changedFlags
+/// names (the flags added or removed): "flag" is a complex value that Graph replaces
+/// as a whole, so sending it along with a read mark turned a completed flag into
+/// notFlagged and dropped its dates. Empty when neither changed.
+[[nodiscard]] QJsonObject flagPatchBody(const Akonadi::Item &item, const QSet<QByteArray> &changedFlags);
 
 /// KMime payload -> body for creating a message from MIME:
 ///   POST /me/messages  with Content-Type: text/plain and base64(MIME)

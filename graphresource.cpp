@@ -1197,20 +1197,28 @@ void GraphResource::deliverFreshPayloads(const Item::List &filled, quint64 gener
 //  Change replay: local -> Graph   (Phase 2/3)
 // ============================================================================
 
-void GraphResource::itemsFlagsChanged(const Item::List &items,
-                                      [[maybe_unused]] const QSet<QByteArray> &addedFlags,
-                                      [[maybe_unused]] const QSet<QByteArray> &removedFlags)
+void GraphResource::itemsFlagsChanged(const Item::List &items, const QSet<QByteArray> &addedFlags, const QSet<QByteArray> &removedFlags)
 {
     qCDebug(GRAPH_LOG) << "replay: flags changed on" << items.size() << "items";
     Replay replay;
     if (!startReplay(changeId(items), replay)) {
         return;
     }
-    // item.flags() already carries the final state, so the added/removed sets are not needed.
+    // Only what changed goes out: the server keeps what KDE does not model (a
+    // completed flag, its dates), which a PATCH of the whole state would overwrite.
+    const QSet<QByteArray> changed = addedFlags + removedFlags;
     QList<GraphBatchJob::Call> calls;
     calls.reserve(items.size());
     for (const Item &item : items) {
-        calls.append({GraphRequest::Method::Patch, QStringLiteral("/me/messages/%1").arg(item.remoteId()), GraphMailHandler::flagPatchBody(item)});
+        const QJsonObject body = GraphMailHandler::flagPatchBody(item, changed);
+        if (!body.isEmpty()) {
+            calls.append({GraphRequest::Method::Patch, QStringLiteral("/me/messages/%1").arg(item.remoteId()), body});
+        }
+    }
+    if (calls.isEmpty()) {
+        // Only flags Graph has no field for changed (answered, forwarded, ...).
+        commitItems(replay, items);
+        return;
     }
     auto job = new GraphBatchJob(mClient, calls, this);
     // A flag on a message that is already gone server-side is moot, and failing the

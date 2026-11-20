@@ -31,7 +31,7 @@ private Q_SLOTS:
         item.setFlag(MessageFlags::Seen);
         item.setFlag(MessageFlags::Flagged);
 
-        const QJsonObject body = GraphMailHandler::flagPatchBody(item);
+        const QJsonObject body = GraphMailHandler::flagPatchBody(item, {MessageFlags::Seen, MessageFlags::Flagged});
         QCOMPARE(body.value(QLatin1String("isRead")).toBool(), true);
         QCOMPARE(body.value(QLatin1String("flag")).toObject().value(QLatin1String("flagStatus")).toString(), QStringLiteral("flagged"));
     }
@@ -39,9 +39,36 @@ private Q_SLOTS:
     void shouldMapClearedFlagsToPatchBody()
     {
         const Item item;
-        const QJsonObject body = GraphMailHandler::flagPatchBody(item);
+        const QJsonObject body = GraphMailHandler::flagPatchBody(item, {MessageFlags::Seen, MessageFlags::Flagged});
         QCOMPARE(body.value(QLatin1String("isRead")).toBool(), false);
         QCOMPARE(body.value(QLatin1String("flag")).toObject().value(QLatin1String("flagStatus")).toString(), QStringLiteral("notFlagged"));
+    }
+
+    // Review 2026-11, C5: marking a message read sent "flag" too, and a completed
+    // flag (which KDE has no flag for) became notFlagged.
+    void shouldSendOnlyTheReadStateWhenOnlyItChanged()
+    {
+        Item item;
+        item.setFlag(MessageFlags::Seen);
+        const QJsonObject body = GraphMailHandler::flagPatchBody(item, {MessageFlags::Seen});
+        QCOMPARE(body.value(QLatin1String("isRead")).toBool(), true);
+        QVERIFY(!body.contains(QLatin1String("flag")));
+    }
+
+    void shouldSendOnlyTheFlagWhenOnlyItChanged()
+    {
+        Item item;
+        item.setFlag(MessageFlags::Flagged);
+        const QJsonObject body = GraphMailHandler::flagPatchBody(item, {MessageFlags::Flagged});
+        QVERIFY(!body.contains(QLatin1String("isRead")));
+        QCOMPARE(body.value(QLatin1String("flag")).toObject().value(QLatin1String("flagStatus")).toString(), QStringLiteral("flagged"));
+    }
+
+    void shouldSendNothingForFlagsGraphDoesNotKnow()
+    {
+        Item item;
+        item.setFlag(MessageFlags::Replied);
+        QVERIFY(GraphMailHandler::flagPatchBody(item, {MessageFlags::Replied}).isEmpty());
     }
 
     void shouldEncodeMimeAsBase64()

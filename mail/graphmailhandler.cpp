@@ -15,14 +15,17 @@ QString mimeType()
     return KMime::Message::mimeType();
 }
 
-QJsonObject flagPatchBody(const Akonadi::Item &item)
+QJsonObject flagPatchBody(const Akonadi::Item &item, const QSet<QByteArray> &changedFlags)
 {
     QJsonObject body;
-    body.insert(QStringLiteral("isRead"), item.hasFlag(Akonadi::MessageFlags::Seen));
-
-    QJsonObject flag;
-    flag.insert(QStringLiteral("flagStatus"), item.hasFlag(Akonadi::MessageFlags::Flagged) ? QStringLiteral("flagged") : QStringLiteral("notFlagged"));
-    body.insert(QStringLiteral("flag"), flag);
+    if (changedFlags.contains(Akonadi::MessageFlags::Seen)) {
+        body.insert(QStringLiteral("isRead"), item.hasFlag(Akonadi::MessageFlags::Seen));
+    }
+    if (changedFlags.contains(Akonadi::MessageFlags::Flagged)) {
+        QJsonObject flag;
+        flag.insert(QStringLiteral("flagStatus"), item.hasFlag(Akonadi::MessageFlags::Flagged) ? QStringLiteral("flagged") : QStringLiteral("notFlagged"));
+        body.insert(QStringLiteral("flag"), flag);
+    }
     return body;
 }
 
