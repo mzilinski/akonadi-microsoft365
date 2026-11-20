@@ -57,9 +57,13 @@ constexpr QByteArrayView kServerCancelled("SERVER-CANCELLED");
 
 [[nodiscard]] QString bodyFingerprint(const Incidence::Ptr &incidence)
 {
+    // Line ends as iCalendar keeps them: Exchange sends CRLF, and the copy Akonadi
+    // stores comes back with LF only, which must not count as a change.
+    QString description = incidence->description();
+    description.remove(QLatin1Char('\r'));
     QCryptographicHash hash(QCryptographicHash::Sha1);
     hash.addData(incidence->descriptionIsRich() ? QByteArrayView("html:") : QByteArrayView("text:"));
-    hash.addData(incidence->description().toUtf8());
+    hash.addData(description.toUtf8());
     return QString::fromLatin1(hash.result().toHex());
 }
 
@@ -960,10 +964,10 @@ QJsonObject toJsonForUpdate(const KCalendarCore::Event::Ptr &event)
         json.remove(QStringLiteral("recurrence"));
     }
     // Only a description that differs from the one read goes back. Without a
-    // fingerprint (cached before it existed) it counts as unchanged: the next
-    // re-listing brings one, and until then the server's body is safe.
+    // fingerprint the event was made in KDE and not read back yet (the mapping
+    // version 2 re-listed everything read before): its description is KDE's own.
     const QString read = event->customProperty(kCustomApp.toByteArray(), kServerBody.toByteArray());
-    if (read.isEmpty() || read == bodyFingerprint(event)) {
+    if (!read.isEmpty() && read == bodyFingerprint(event)) {
         json.remove(QStringLiteral("body"));
     }
     // A location removed in KDE: toJson() leaves an empty one out.

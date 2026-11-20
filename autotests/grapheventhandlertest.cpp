@@ -1109,17 +1109,30 @@ private Q_SLOTS:
         QVERIFY(body.value(QLatin1String("content")).toString().contains(QLatin1String("meetup-join")));
     }
 
-    void shouldKeepTheBodyOfAnEventCachedWithoutFingerprint()
+    void shouldSendTheDescriptionOfAnEventMadeInKde()
     {
-        // Cached by an older mapping: whether the description changed is unknown, and
-        // the server's body must not be replaced by a preview.
+        // Created in KDE and not read back yet: no fingerprint, and the description is
+        // KDE's own (found by review: an edit before the next sync was dropped).
         const QDateTime start(QDate(2026, 11, 23), QTime(9, 0), QTimeZone::utc());
         Event::Ptr event(new Event);
         event->setDtStart(start);
         event->setDtEnd(start.addSecs(1800));
-        event->setDescription(QStringLiteral("Agenda Join"));
-        QVERIFY(!GraphEventHandler::toJsonForUpdate(event).contains(QLatin1String("body")));
-        QVERIFY(GraphEventHandler::toJson(event).contains(QLatin1String("body")));
+        event->setDescription(QStringLiteral("Fixed agenda"));
+        QCOMPARE(GraphEventHandler::toJsonForUpdate(event).value(QLatin1String("body")).toObject().value(QLatin1String("content")).toString(),
+                 QStringLiteral("Fixed agenda"));
+    }
+
+    void shouldNotTakeCrlfLineEndsForAChange()
+    {
+        // Exchange sends CRLF; the copy Akonadi keeps may come back with LF only.
+        QJsonObject json = htmlEventJson();
+        json.insert(QStringLiteral("body"),
+                    QJsonObject{{QStringLiteral("contentType"), QStringLiteral("html")},
+                                {QStringLiteral("content"), QStringLiteral("<html>\r\n<body>\r\n<p>Agenda</p>\r\n</body>\r\n</html>\r\n")}});
+        const Event::Ptr event = GraphEventHandler::toEvent(json);
+        QVERIFY(event);
+        event->setDescription(event->description().remove(QLatin1Char('\r')), true);
+        QVERIFY(!GraphEventHandler::toJsonForUpdate(throughICal(event)).contains(QLatin1String("body")));
     }
 
     // Review 2026-11, C4: tentative, oof and workingElsewhere were written back as busy.
