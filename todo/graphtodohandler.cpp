@@ -22,6 +22,10 @@ constexpr QByteArrayView kServerDue("SERVER-DUE");
 // The server's lastModifiedDateTime as read (X-KDE-GRAPH-SERVER-MODIFIED): tells whether
 // a sync has delivered the task since a given moment.
 constexpr QByteArrayView kServerModified("SERVER-MODIFIED");
+// The server's status as read (X-KDE-GRAPH-SERVER-STATUS). KCalendarCore has nothing
+// for waitingOnOthers and deferred; they go back as they were while the task is
+// neither completed nor in progress.
+constexpr QByteArrayView kServerStatus("SERVER-STATUS");
 
 // To Do keeps start and due as dates: it drops the time and takes the date in the zone
 // sent along. Its own clients write the user's local midnight, which Graph hands out
@@ -95,6 +99,9 @@ KCalendarCore::Todo::Ptr toTodo(const QJsonObject &json)
     todo->setAllDay(start.isValid() || due.isValid());
 
     const QString status = json.value(QLatin1String("status")).toString();
+    if (!status.isEmpty()) {
+        todo->setCustomProperty(kCustomApp.toByteArray(), kServerStatus.toByteArray(), status);
+    }
     if (status == QLatin1String("completed")) {
         const QDateTime completed = GraphEventHandler::parseDateTimeTimeZone(json.value(QLatin1String("completedDateTime")).toObject());
         if (completed.isValid()) {
@@ -153,8 +160,15 @@ QJsonObject toJson(const KCalendarCore::Todo::Ptr &todo)
         json.insert(QStringLiteral("body"), body);
     }
 
+    // A date removed in KDE is cleared on the server with null; leaving it out kept it.
     if (todo->dtStart().isValid()) {
         json.insert(QStringLiteral("startDateTime"), taskDateToJson(todo->dtStart(), todo->allDay()));
+    } else {
+        json.insert(QStringLiteral("startDateTime"), QJsonValue::Null);
+    }
+    if (!todo->dtDue().isValid() && !todo->recurs()) {
+        // (A series keeps its due date: To Do repeats a task from it.)
+        json.insert(QStringLiteral("dueDateTime"), QJsonValue::Null);
     }
     if (todo->dtDue().isValid()) {
         const QJsonObject due = taskDateToJson(todo->dtDue(), todo->allDay());
@@ -172,7 +186,9 @@ QJsonObject toJson(const KCalendarCore::Todo::Ptr &todo)
     } else if (todo->status() == Incidence::StatusInProcess || todo->percentComplete() > 0) {
         json.insert(QStringLiteral("status"), QStringLiteral("inProgress"));
     } else {
-        json.insert(QStringLiteral("status"), QStringLiteral("notStarted"));
+        const QString server = todo->customProperty(kCustomApp.toByteArray(), kServerStatus.toByteArray());
+        const bool keep = server == QLatin1String("waitingOnOthers") || server == QLatin1String("deferred");
+        json.insert(QStringLiteral("status"), keep ? server : QStringLiteral("notStarted"));
     }
 
     const int priority = todo->priority();
@@ -199,9 +215,8 @@ QJsonObject toJson(const KCalendarCore::Todo::Ptr &todo)
         json.insert(QStringLiteral("isReminderOn"), false);
     }
 
-    if (!todo->categories().isEmpty()) {
-        json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(todo->categories()));
-    }
+    // Always, so that removing the last category reaches the server.
+    json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(todo->categories()));
 
     const QJsonObject recurrence = GraphEventHandler::recurrenceToJson(todo);
     if (!recurrence.isEmpty()) {
@@ -236,6 +251,13 @@ QJsonObject toJsonForCreate(const KCalendarCore::Todo::Ptr &todo)
     // server-side one read with the payload belongs to the original.
     const Todo::Ptr copy(todo->clone());
     setServerDue(copy, QString());
-    return toJson(copy);
+    QJsonObject json = toJson(copy);
+    // Nothing to clear on a task that does not exist yet.
+    for (const auto key : {QStringLiteral("startDateTime"), QStringLiteral("dueDateTime")}) {
+        if (json.value(key).isNull()) {
+            json.remove(key);
+        }
+    }
+    return json;
 }
 }

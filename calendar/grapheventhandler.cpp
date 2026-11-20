@@ -47,6 +47,9 @@ constexpr QByteArrayView kServerBody("SERVER-BODY");
 // free (transparent) and busy (opaque); tentative, oof and workingElsewhere go back
 // as they were as long as the event stays opaque.
 constexpr QByteArrayView kServerShowAs("SERVER-SHOW-AS");
+// Set when the server named a location (X-KDE-GRAPH-SERVER-LOCATION): only then does
+// an empty location on an update clear it there.
+constexpr QByteArrayView kServerLocation("SERVER-LOCATION");
 
 [[nodiscard]] QString bodyFingerprint(const Incidence::Ptr &incidence)
 {
@@ -755,6 +758,9 @@ KCalendarCore::Event::Ptr toEvent(const QJsonObject &json)
     event->setDtEnd(end);
 
     event->setLocation(json.value(QLatin1String("location")).toObject().value(QLatin1String("displayName")).toString());
+    if (!event->location().isEmpty()) {
+        event->setCustomProperty(kCustomApp.toByteArray(), kServerLocation.toByteArray(), QStringLiteral("1"));
+    }
 
     const QJsonObject organizer = json.value(QLatin1String("organizer")).toObject().value(QLatin1String("emailAddress")).toObject();
     if (!organizer.isEmpty()) {
@@ -840,9 +846,8 @@ QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
         json.insert(QStringLiteral("location"), loc);
     }
 
-    if (!event->categories().isEmpty()) {
-        json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(event->categories()));
-    }
+    // Always, so that removing the last category reaches the server.
+    json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(event->categories()));
     QString showAs = QStringLiteral("busy");
     if (event->transparency() == Event::Transparent) {
         showAs = QStringLiteral("free");
@@ -885,6 +890,10 @@ QJsonObject toJsonForUpdate(const KCalendarCore::Event::Ptr &event)
     const QString read = event->customProperty(kCustomApp.toByteArray(), kServerBody.toByteArray());
     if (read.isEmpty() || read == bodyFingerprint(event)) {
         json.remove(QStringLiteral("body"));
+    }
+    // A location removed in KDE: toJson() leaves an empty one out.
+    if (event->location().isEmpty() && !event->customProperty(kCustomApp.toByteArray(), kServerLocation.toByteArray()).isEmpty()) {
+        json.insert(QStringLiteral("location"), QJsonObject{{QStringLiteral("displayName"), QString()}});
     }
     return json;
 }

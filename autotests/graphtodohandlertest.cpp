@@ -332,6 +332,61 @@ private Q_SLOTS:
         back.insert(QStringLiteral("id"), QStringLiteral("AAMkTask6"));
         QCOMPARE(GraphTodoHandler::toTodo(back)->dtDue().date(), QDate(2026, 8, 1));
     }
+
+    // Review 2026-11, I4: a date or category removed in KDE was left out of the PATCH,
+    // so the server kept it; waitingOnOthers and deferred came back as notStarted.
+    static QJsonObject serverTask()
+    {
+        QJsonObject json;
+        json.insert(QStringLiteral("id"), QStringLiteral("AAMkTaskClear"));
+        json.insert(QStringLiteral("title"), QStringLiteral("Report"));
+        json.insert(QStringLiteral("startDateTime"), taskDateTime(QStringLiteral("2026-11-02T00:00:00.0000000")));
+        json.insert(QStringLiteral("dueDateTime"), taskDateTime(QStringLiteral("2026-11-30T00:00:00.0000000")));
+        json.insert(QStringLiteral("categories"), QJsonArray{QStringLiteral("Arbeit")});
+        json.insert(QStringLiteral("status"), QStringLiteral("waitingOnOthers"));
+        return json;
+    }
+
+    void shouldClearRemovedDatesAndCategories()
+    {
+        const Todo::Ptr todo = GraphTodoHandler::toTodo(serverTask());
+        QVERIFY(todo);
+        todo->setDtStart(QDateTime());
+        todo->setDtDue(QDateTime());
+        todo->setCategories(QStringList());
+        const QJsonObject json = GraphTodoHandler::toJson(todo);
+        QVERIFY(json.contains(QLatin1String("startDateTime")) && json.value(QLatin1String("startDateTime")).isNull());
+        QVERIFY(json.contains(QLatin1String("dueDateTime")) && json.value(QLatin1String("dueDateTime")).isNull());
+        QCOMPARE(json.value(QLatin1String("categories")).toArray(), QJsonArray());
+    }
+
+    void shouldNotSendNullsForANewTask()
+    {
+        Todo::Ptr todo(new Todo);
+        todo->setSummary(QStringLiteral("New"));
+        const QJsonObject json = GraphTodoHandler::toJsonForCreate(todo);
+        QVERIFY(!json.contains(QLatin1String("startDateTime")));
+        QVERIFY(!json.contains(QLatin1String("dueDateTime")));
+    }
+
+    void shouldKeepTheServersWaitingStatus_data()
+    {
+        QTest::addColumn<QString>("server");
+        QTest::newRow("waitingOnOthers") << QStringLiteral("waitingOnOthers");
+        QTest::newRow("deferred") << QStringLiteral("deferred");
+    }
+
+    void shouldKeepTheServersWaitingStatus()
+    {
+        QFETCH(QString, server);
+        QJsonObject json = serverTask();
+        json.insert(QStringLiteral("status"), server);
+        const Todo::Ptr todo = GraphTodoHandler::toTodo(json);
+        QVERIFY(todo);
+        QCOMPARE(GraphTodoHandler::toJson(todo).value(QLatin1String("status")).toString(), server);
+        todo->setCompleted(true);
+        QCOMPARE(GraphTodoHandler::toJson(todo).value(QLatin1String("status")).toString(), QStringLiteral("completed"));
+    }
 };
 
 QTEST_GUILESS_MAIN(GraphTodoHandlerTest)

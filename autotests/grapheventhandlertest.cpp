@@ -1154,6 +1154,30 @@ private Q_SLOTS:
         }
         QCOMPARE(GraphEventHandler::toJsonForUpdate(event).value(QLatin1String("showAs")).toString(), expected);
     }
+
+    // Review 2026-11, I4: a location or the last category removed in KDE stayed on
+    // the server.
+    void shouldClearARemovedLocationAndCategories()
+    {
+        QJsonObject json = htmlEventJson();
+        json.insert(QStringLiteral("location"), QJsonObject{{QStringLiteral("displayName"), QStringLiteral("Room 1")}});
+        json.insert(QStringLiteral("categories"), QJsonArray{QStringLiteral("Work")});
+        const Event::Ptr event = throughICal(GraphEventHandler::toEvent(json));
+        QVERIFY(event);
+        event->setLocation(QString());
+        event->setCategories(QStringList());
+        const QJsonObject update = GraphEventHandler::toJsonForUpdate(event);
+        QCOMPARE(update.value(QLatin1String("location")).toObject().value(QLatin1String("displayName")).toString(), QString());
+        QVERIFY(update.contains(QLatin1String("location")));
+        QCOMPARE(update.value(QLatin1String("categories")).toArray(), QJsonArray());
+    }
+
+    void shouldNotClearALocationTheServerNeverHad()
+    {
+        const Event::Ptr event = throughICal(GraphEventHandler::toEvent(htmlEventJson()));
+        QVERIFY(event);
+        QVERIFY(!GraphEventHandler::toJsonForUpdate(event).contains(QLatin1String("location")));
+    }
 };
 
 QTEST_GUILESS_MAIN(GraphEventHandlerTest)
