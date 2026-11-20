@@ -67,7 +67,6 @@ private:
     bool mFullListing = false;
     Akonadi::Item::List mChanged;
     Akonadi::Item::List mRemoved;
-    int mPhotoIndex = 0; // next contact whose photo has not been requested yet
     QHash<QString, KCalendarCore::Event::Ptr> mMasters; // series of this round, by id
     QHash<QString, QStringList> mSeriesExceptions;
 };

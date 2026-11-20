@@ -26,13 +26,12 @@ public:
     GraphFetchItemPayloadJob(GraphClient &client, const Akonadi::Item::List &items, QObject *parent = nullptr);
 
     void start() override;
+    /// The items with their payload; those deleted on the server meanwhile are left out.
     [[nodiscard]] Akonadi::Item::List items() const;
 
 private:
-    void fetchBatch();
     void applyMime(Akonadi::Item &item, const QByteArray &mime);
 
     GraphClient &mClient;
     Akonadi::Item::List mItems;
-    int mIndex = 0; // next item not yet requested
 };

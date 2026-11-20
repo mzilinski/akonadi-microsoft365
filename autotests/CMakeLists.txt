@@ -42,6 +42,7 @@ add_graph_test(graphfetchitemsjobtest graphfetchitemsjobtest.cpp ../jobs/graphfe
 add_graph_test(graphretrypolicytest graphretrypolicytest.cpp)
 add_graph_test(graphoauthtest graphoauthtest.cpp)
 add_graph_test(graphrequesttest graphrequesttest.cpp)
+add_graph_test(graphfetchitempayloadjobtest graphfetchitempayloadjobtest.cpp ../jobs/graphfetchitempayloadjob.cpp ../jobs/graphbatchjob.cpp)
 add_graph_test(
     graphfetchpimitemsjobtest
     graphfetchpimitemsjobtest.cpp

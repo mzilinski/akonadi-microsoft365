@@ -59,6 +59,8 @@ void GraphBatchJob::start()
         done();
     });
     mResponses = QList<QJsonObject>(mCalls.size());
+    mBodies = QList<QJsonValue>(mCalls.size(), QJsonValue(QJsonValue::Undefined));
+    mHeaders = QList<QJsonObject>(mCalls.size());
     if (mCalls.isEmpty()) {
         // Stay asynchronous like every other exit of this job, so a caller that
         // connects after start() cannot miss the result (same as GraphRequest).
@@ -144,7 +146,7 @@ void GraphBatchJob::issueNextBatch()
                 retryAfter = qMax(retryAfter, GraphRequest::retryAfterSeconds(header.toLatin1(), QDateTime::currentDateTimeUtc()));
                 continue;
             }
-            finishCall(index, status, resp.value(QLatin1String("body")).toObject());
+            finishCall(index, status, resp.value(QLatin1String("body")), resp.value(QLatin1String("headers")).toObject());
         }
         for (const int i : indexes) {
             if (!answered.contains(i)) {
@@ -169,14 +171,18 @@ void GraphBatchJob::issueNextBatch()
     req->start();
 }
 
-void GraphBatchJob::finishCall(int index, int status, const QJsonObject &body)
+void GraphBatchJob::finishCall(int index, int status, const QJsonValue &bodyValue, const QJsonObject &headers)
 {
+    const QJsonObject body = bodyValue.toObject();
     if (status >= 200 && status < 300) {
         mResponses[index] = body;
+        mBodies[index] = bodyValue;
+        mHeaders[index] = headers;
         ++mSucceeded;
         return;
     }
     if (mIgnoreNotFound && status == 404) {
+        mNotFound.insert(index);
         // Expected when the item is already gone on the server; logged so that a
         // systematic cause (such as a wrong id) does not go unnoticed.
         qCInfo(GRAPH_LOG) << "batch: treating 404 as done for" << mCalls.at(index).path;
@@ -222,6 +228,21 @@ void GraphBatchJob::finish()
 QList<QJsonObject> GraphBatchJob::responses() const
 {
     return mResponses;
+}
+
+QList<QJsonValue> GraphBatchJob::bodies() const
+{
+    return mBodies;
+}
+
+QList<QJsonObject> GraphBatchJob::headers() const
+{
+    return mHeaders;
+}
+
+bool GraphBatchJob::wasNotFound(int index) const
+{
+    return mNotFound.contains(index);
 }
 
 int GraphBatchJob::succeeded() const

@@ -6,16 +6,14 @@
 #include "graphfetchitempayloadjob.h"
 
 #include "graphclient/graphrequest.h"
+#include "jobs/graphbatchjob.h"
 
-#include <KLocalizedString>
 #include <KMime/Message>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QTimer>
 
 using namespace Akonadi;
-
-// Graph's /$batch accepts at most 20 sub-requests per call.
-static constexpr int kBatchSize = 20;
 
 GraphFetchItemPayloadJob::GraphFetchItemPayloadJob(GraphClient &client, const Item::List &items, QObject *parent)
     : KJob(parent)
@@ -27,69 +25,44 @@ GraphFetchItemPayloadJob::GraphFetchItemPayloadJob(GraphClient &client, const It
 void GraphFetchItemPayloadJob::start()
 {
     if (mItems.isEmpty()) {
-        emitResult();
+        QTimer::singleShot(0, this, [this] {
+            emitResult();
+        });
         return;
     }
-    fetchBatch();
-}
-
-void GraphFetchItemPayloadJob::fetchBatch()
-{
-    // Build one /$batch call for up to kBatchSize messages. The sub-request "id" is the
-    // index into mItems so we can route each response back to the right item.
-    const int first = mIndex;
-    const int last = qMin(mIndex + kBatchSize, mItems.size());
-
-    QJsonArray requests;
-    for (int i = first; i < last; ++i) {
-        QJsonObject sub;
-        sub.insert(QStringLiteral("id"), QString::number(i));
-        sub.insert(QStringLiteral("method"), QStringLiteral("GET"));
-        sub.insert(QStringLiteral("url"), QStringLiteral("/me/messages/%1/$value").arg(mItems[i].remoteId()));
-        requests.append(sub);
+    // Through GraphBatchJob (20 to a /$batch): a throttled message is asked again by
+    // itself, and one deleted meanwhile (404) does not fail the others.
+    QList<GraphBatchJob::Call> calls;
+    calls.reserve(mItems.size());
+    for (const Item &item : std::as_const(mItems)) {
+        calls.append({GraphRequest::Method::Get, QStringLiteral("/me/messages/%1/$value").arg(item.remoteId()), {}});
     }
-    QJsonObject body;
-    body.insert(QStringLiteral("requests"), requests);
-
-    auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Method::Post);
-    req->setPath(QStringLiteral("/$batch"));
-    req->setBody(body);
-    req->setRepeatable(true); // GETs only
-    connect(req, &KJob::result, this, [this, req, last](KJob *job) {
+    auto batch = new GraphBatchJob(mClient, calls, this);
+    batch->setIgnoreNotFound(true);
+    connect(batch, &KJob::result, this, [this, batch](KJob *job) {
         if (job->error()) {
             setError(job->error());
             setErrorText(job->errorText());
             emitResult();
             return;
         }
-        const QJsonArray responses = req->responseObject().value(QLatin1String("responses")).toArray();
-        for (const auto &r : responses) {
-            const QJsonObject resp = r.toObject();
-            const int idx = resp.value(QLatin1String("id")).toString().toInt();
-            if (idx < 0 || idx >= mItems.size()) {
+        const QList<QJsonValue> bodies = batch->bodies();
+        Item::List filled;
+        filled.reserve(mItems.size());
+        for (int i = 0; i < mItems.size(); ++i) {
+            if (batch->wasNotFound(i)) {
+                // Gone on the server; its tombstone comes with the next delta.
                 continue;
             }
-            const int status = resp.value(QLatin1String("status")).toInt();
-            if (status < 200 || status >= 300) {
-                setError(KJob::UserDefinedError);
-                setErrorText(i18n("Failed to fetch the content of message %1 (HTTP %2)", mItems[idx].remoteId(), status));
-                emitResult();
-                return;
-            }
             // /$value in a batch comes back as a base64-encoded string body.
-            const QByteArray mime = QByteArray::fromBase64(resp.value(QLatin1String("body")).toString().toLatin1());
-            applyMime(mItems[idx], mime);
+            Item item = mItems.at(i);
+            applyMime(item, QByteArray::fromBase64(bodies.value(i).toString().toLatin1()));
+            filled.append(item);
         }
-
-        mIndex = last;
-        if (mIndex < mItems.size()) {
-            fetchBatch();
-        } else {
-            emitResult();
-        }
+        mItems = filled;
+        emitResult();
     });
-    req->start();
+    batch->start();
 }
 
 void GraphFetchItemPayloadJob::applyMime(Item &item, const QByteArray &mime)

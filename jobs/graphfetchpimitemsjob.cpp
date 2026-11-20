@@ -7,6 +7,7 @@
 
 #include "calendar/grapheventhandler.h"
 #include "contact/graphcontacthandler.h"
+#include "graph_debug.h"
 #include "graphclient/graphrequest.h"
 #include "jobs/graphbatchjob.h"
 #include "todo/graphtodohandler.h"
@@ -287,62 +288,39 @@ QString GraphFetchPimItemsJob::exceptionRevision(const QString &masterId)
 
 void GraphFetchPimItemsJob::fetchPhotos()
 {
-    // GET /me/contacts/{id}/photo/$value for each changed contact, bundled via /$batch
-    // (20 sub-requests per call, like the mail payload path). 404 = contact has no photo.
-    constexpr int batchSize = 20;
-    const int first = mPhotoIndex;
-    const int last = qMin(mPhotoIndex + batchSize, int(mChanged.size()));
-
-    QJsonArray requests;
-    for (int i = first; i < last; ++i) {
-        QJsonObject sub;
-        sub.insert(QStringLiteral("id"), QString::number(i));
-        sub.insert(QStringLiteral("method"), QStringLiteral("GET"));
-        sub.insert(QStringLiteral("url"), QStringLiteral("/me/contacts/%1/photo/$value").arg(mChanged.at(i).remoteId()));
-        requests.append(sub);
+    // GET /me/contacts/{id}/photo/$value for each changed contact, through GraphBatchJob
+    // (20 to a /$batch, throttled ones asked again). 404 = the contact has no photo.
+    QList<GraphBatchJob::Call> calls;
+    calls.reserve(mChanged.size());
+    for (const Item &item : std::as_const(mChanged)) {
+        calls.append({GraphRequest::Method::Get, QStringLiteral("/me/contacts/%1/photo/$value").arg(item.remoteId()), {}});
     }
-    QJsonObject body;
-    body.insert(QStringLiteral("requests"), requests);
-
-    auto req = new GraphRequest(mClient, this);
-    req->setMethod(GraphRequest::Method::Post);
-    req->setPath(QStringLiteral("/$batch"));
-    req->setBody(body);
-    req->setRepeatable(true); // GETs only
-    connect(req, &KJob::result, this, [this, req, last](KJob *job) {
+    auto batch = new GraphBatchJob(mClient, calls, this);
+    batch->setIgnoreNotFound(true);
+    connect(batch, &KJob::result, this, [this, batch](KJob *job) {
         if (job->error()) {
-            emitResult(); // photos are decoration: deliver the contacts without them
-            return;
+            // Photos are decoration: the contacts go without the ones that failed.
+            qCWarning(GRAPH_LOG) << "contact photos:" << job->errorText();
         }
-        const QJsonArray responses = req->responseObject().value(QLatin1String("responses")).toArray();
-        for (const auto &r : responses) {
-            const QJsonObject resp = r.toObject();
-            const int idx = resp.value(QLatin1String("id")).toString().toInt();
-            const int status = resp.value(QLatin1String("status")).toInt();
-            if (idx < 0 || idx >= mChanged.size() || status != 200) {
-                continue;
-            }
+        const QList<QJsonValue> bodies = batch->bodies();
+        const QList<QJsonObject> headers = batch->headers();
+        for (int i = 0; i < mChanged.size(); ++i) {
             // /$value in a batch comes back as a base64-encoded string body.
-            const QByteArray data = QByteArray::fromBase64(resp.value(QLatin1String("body")).toString().toLatin1());
+            const QByteArray data = QByteArray::fromBase64(bodies.value(i).toString().toLatin1());
             if (data.isEmpty()) {
                 continue;
             }
-            QString type = resp.value(QLatin1String("headers")).toObject().value(QLatin1String("Content-Type")).toString();
+            QString type = headers.value(i).value(QLatin1String("Content-Type")).toString();
             type = type.startsWith(QLatin1String("image/")) ? type.mid(6) : QStringLiteral("jpeg");
-            auto addressee = mChanged.at(idx).payload<KContacts::Addressee>();
+            auto addressee = mChanged.at(i).payload<KContacts::Addressee>();
             KContacts::Picture photo;
             photo.setRawData(data, type);
             addressee.setPhoto(photo);
-            mChanged[idx].setPayload(addressee);
+            mChanged[i].setPayload(addressee);
         }
-        mPhotoIndex = last;
-        if (mPhotoIndex < mChanged.size()) {
-            fetchPhotos();
-        } else {
-            emitResult();
-        }
+        emitResult();
     });
-    req->start();
+    batch->start();
 }
 
 Collection GraphFetchPimItemsJob::collection() const
