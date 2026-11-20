@@ -286,6 +286,17 @@ QString GraphFetchPimItemsJob::exceptionRevision(const QString &masterId)
     return QStringLiteral("series:") + masterId;
 }
 
+QString GraphFetchPimItemsJob::masterOfRevision(const QString &remoteRevision)
+{
+    const QString prefix = exceptionRevision(QString());
+    return remoteRevision.startsWith(prefix) ? remoteRevision.mid(prefix.size()) : QString();
+}
+
+QString GraphFetchPimItemsJob::eventFields()
+{
+    return kEventFields;
+}
+
 void GraphFetchPimItemsJob::fetchPhotos()
 {
     // GET /me/contacts/{id}/photo/$value for each changed contact, through GraphBatchJob

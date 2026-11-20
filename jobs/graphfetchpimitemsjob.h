@@ -51,6 +51,10 @@ public:
     [[nodiscard]] QHash<QString, QStringList> seriesExceptions() const;
     /// Remote revision of the item of a changed occurrence of the series @p masterId.
     [[nodiscard]] static QString exceptionRevision(const QString &masterId);
+    /// The master id an exception item's remote revision names; empty for other items.
+    [[nodiscard]] static QString masterOfRevision(const QString &remoteRevision);
+    /// The event fields mapped ($select), for every request that reads events.
+    [[nodiscard]] static QString eventFields();
 
 private:
     void onDeltaFinished(KJob *);

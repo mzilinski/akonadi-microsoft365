@@ -1104,46 +1104,70 @@ bool GraphResource::retrieveItems(const Akonadi::Item::List &items, [[maybe_unus
                 itemsRetrieved(items);
                 return true;
             }
-            // Cache miss: re-fetch each requested event/contact/task individually and
-            // rebuild its payload. (Rare — payloads are normally cached from the delta sync.)
+            // Cache miss: re-fetch the requested events/contacts/tasks and rebuild their
+            // payloads (rare: payloads normally come with the delta sync). Through
+            // GraphBatchJob, twenty to a /$batch one after another, rather than one
+            // request per item all at once, which Graph throttles (four at a time per
+            // mailbox). An exception of a series needs its series to be rebuilt.
             const bool isEvent = mime == GraphEventHandler::mimeType();
             const bool isTodo = mime == GraphTodoHandler::mimeType();
-            auto pending = std::make_shared<Item::List>();
-            auto remaining = std::make_shared<int>(items.size());
-            const quint64 generation = mTaskGeneration;
+            QList<GraphBatchJob::Call> calls;
+            QList<int> masterCall(items.size(), -1);
             for (const Item &item : items) {
-                auto req = new GraphRequest(mClient, this);
+                QString path;
                 if (isEvent) {
-                    req->setPath(QStringLiteral("/me/events/%1").arg(item.remoteId()));
+                    path = QStringLiteral("/me/events/%1?$select=%2").arg(item.remoteId(), GraphFetchPimItemsJob::eventFields());
                 } else if (isTodo) {
-                    req->setPath(QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(item.parentCollection().remoteId(), item.remoteId()));
+                    path = QStringLiteral("/me/todo/lists/%1/tasks/%2").arg(item.parentCollection().remoteId(), item.remoteId());
                 } else {
-                    req->setPath(QStringLiteral("/me/contacts/%1").arg(item.remoteId()));
+                    path = QStringLiteral("/me/contacts/%1").arg(item.remoteId());
                 }
-                connect(req, &KJob::result, this, [this, item, req, isEvent, isTodo, pending, remaining, generation](KJob *j) {
-                    if (!j->error()) {
-                        Item filled(item);
-                        if (isEvent) {
-                            auto ev = GraphEventHandler::toEvent(req->responseObject());
-                            if (ev) {
-                                filled.setPayload<KCalendarCore::Incidence::Ptr>(ev);
-                            }
-                        } else if (isTodo) {
-                            auto todo = GraphTodoHandler::toTodo(req->responseObject());
-                            if (todo) {
-                                filled.setPayload<KCalendarCore::Incidence::Ptr>(todo);
-                            }
-                        } else {
-                            filled.setPayload<KContacts::Addressee>(GraphContactHandler::toAddressee(req->responseObject()));
-                        }
-                        pending->append(filled);
-                    }
-                    if (--(*remaining) == 0) {
-                        deliverFreshPayloads(*pending, generation);
-                    }
-                });
-                req->start();
+                calls.append({GraphRequest::Method::Get, path, {}});
             }
+            for (int i = 0; isEvent && i < items.size(); ++i) {
+                const QString master = GraphFetchPimItemsJob::masterOfRevision(items.at(i).remoteRevision());
+                if (!master.isEmpty()) {
+                    masterCall[i] = calls.size();
+                    calls.append({GraphRequest::Method::Get, QStringLiteral("/me/events/%1?$select=%2").arg(master, GraphFetchPimItemsJob::eventFields()), {}});
+                }
+            }
+            auto batch = new GraphBatchJob(mClient, calls, this);
+            batch->setIgnoreNotFound(true); // deleted meanwhile: left out
+            const quint64 generation = mTaskGeneration;
+            connect(batch, &KJob::result, this, [this, batch, items, isEvent, isTodo, masterCall, generation](KJob *job) {
+                if (job->error()) {
+                    qCWarning(GRAPH_LOG) << "re-fetching payloads:" << job->errorText();
+                }
+                const QList<QJsonObject> responses = batch->responses();
+                Item::List filled;
+                for (int i = 0; i < items.size(); ++i) {
+                    const QJsonObject json = responses.value(i);
+                    if (json.isEmpty()) {
+                        continue; // gone, or failed
+                    }
+                    Item item(items.at(i));
+                    if (isEvent) {
+                        const KCalendarCore::Event::Ptr event = masterCall.at(i) < 0
+                            ? GraphEventHandler::toEvent(json)
+                            : GraphEventHandler::toException(json, GraphEventHandler::toEvent(responses.value(masterCall.at(i))));
+                        if (!event) {
+                            continue;
+                        }
+                        item.setPayload<KCalendarCore::Incidence::Ptr>(event);
+                    } else if (isTodo) {
+                        const auto todo = GraphTodoHandler::toTodo(json);
+                        if (!todo) {
+                            continue;
+                        }
+                        item.setPayload<KCalendarCore::Incidence::Ptr>(todo);
+                    } else {
+                        item.setPayload<KContacts::Addressee>(GraphContactHandler::toAddressee(json));
+                    }
+                    filled.append(item);
+                }
+                deliverFreshPayloads(filled, generation);
+            });
+            batch->start();
             return true;
         }
     }
