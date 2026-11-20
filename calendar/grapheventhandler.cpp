@@ -13,6 +13,7 @@
 #include <KCalendarCore/RecurrenceRule>
 
 #include <QBitArray>
+#include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>
 #include <QHash>
@@ -36,6 +37,24 @@ constexpr QByteArrayView kKeepServerRecurrence("KEEP-SERVER-RECURRENCE");
 // rewrites parts of a rule from the start date on every save (week start, start day,
 // day of month, position); those parts go back as the server has them.
 constexpr QByteArrayView kServerRecurrence("SERVER-RECURRENCE");
+// A fingerprint of the description as read from the server (X-KDE-GRAPH-SERVER-BODY).
+// toJsonForUpdate() leaves "body" out while the description still matches it: KDE
+// cannot always hold the server's body as it is (an HTML body it cannot render, or a
+// cache from before the body was read in full), and sending it back unchanged could
+// only lose something, a Teams join link for one.
+constexpr QByteArrayView kServerBody("SERVER-BODY");
+// The server's showAs as read (X-KDE-GRAPH-SERVER-SHOW-AS). KCalendarCore knows only
+// free (transparent) and busy (opaque); tentative, oof and workingElsewhere go back
+// as they were as long as the event stays opaque.
+constexpr QByteArrayView kServerShowAs("SERVER-SHOW-AS");
+
+[[nodiscard]] QString bodyFingerprint(const Incidence::Ptr &incidence)
+{
+    QCryptographicHash hash(QCryptographicHash::Sha1);
+    hash.addData(incidence->descriptionIsRich() ? QByteArrayView("html:") : QByteArrayView("text:"));
+    hash.addData(incidence->description().toUtf8());
+    return QString::fromLatin1(hash.result().toHex());
+}
 
 // Graph day names, Monday first like KCalendarCore's day bits (Monday = bit 0 = day 1).
 constexpr const char *kDayNames[] = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"};
@@ -693,11 +712,15 @@ KCalendarCore::Event::Ptr toEvent(const QJsonObject &json)
     event->setSummary(json.value(QLatin1String("subject")).toString());
 
     const QJsonObject body = json.value(QLatin1String("body")).toObject();
-    if (body.value(QLatin1String("contentType")).toString() == QLatin1String("text")) {
-        event->setDescription(body.value(QLatin1String("content")).toString());
+    if (body.contains(QLatin1String("content"))) {
+        // In full: an HTML body (most events, every Teams meeting) as rich text, so
+        // that its links and formatting survive. bodyPreview was only ~255 characters.
+        const bool html = body.value(QLatin1String("contentType")).toString().compare(QLatin1String("html"), Qt::CaseInsensitive) == 0;
+        event->setDescription(body.value(QLatin1String("content")).toString(), html);
     } else {
         event->setDescription(json.value(QLatin1String("bodyPreview")).toString());
     }
+    event->setCustomProperty(kCustomApp.toByteArray(), kServerBody.toByteArray(), bodyFingerprint(event));
 
     const bool allDay = json.value(QLatin1String("isAllDay")).toBool();
     event->setAllDay(allDay);
@@ -765,8 +788,12 @@ KCalendarCore::Event::Ptr toEvent(const QJsonObject &json)
     }
     event->setCategories(categories);
 
-    if (json.value(QLatin1String("showAs")).toString() == QLatin1String("free")) {
+    const QString showAs = json.value(QLatin1String("showAs")).toString();
+    if (showAs == QLatin1String("free")) {
         event->setTransparency(Event::Transparent);
+    }
+    if (!showAs.isEmpty()) {
+        event->setCustomProperty(kCustomApp.toByteArray(), kServerShowAs.toByteArray(), showAs);
     }
     const QString sensitivity = json.value(QLatin1String("sensitivity")).toString();
     if (sensitivity == QLatin1String("private")) {
@@ -792,7 +819,7 @@ QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
     json.insert(QStringLiteral("subject"), event->summary());
 
     QJsonObject body;
-    body.insert(QStringLiteral("contentType"), QStringLiteral("text"));
+    body.insert(QStringLiteral("contentType"), event->descriptionIsRich() ? QStringLiteral("html") : QStringLiteral("text"));
     body.insert(QStringLiteral("content"), event->description());
     json.insert(QStringLiteral("body"), body);
 
@@ -816,7 +843,16 @@ QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
     if (!event->categories().isEmpty()) {
         json.insert(QStringLiteral("categories"), QJsonArray::fromStringList(event->categories()));
     }
-    json.insert(QStringLiteral("showAs"), event->transparency() == Event::Transparent ? QStringLiteral("free") : QStringLiteral("busy"));
+    QString showAs = QStringLiteral("busy");
+    if (event->transparency() == Event::Transparent) {
+        showAs = QStringLiteral("free");
+    } else {
+        const QString server = event->customProperty(kCustomApp.toByteArray(), kServerShowAs.toByteArray());
+        if (!server.isEmpty() && server != QLatin1String("free")) {
+            showAs = server;
+        }
+    }
+    json.insert(QStringLiteral("showAs"), showAs);
 
     if (!event->recurs()) {
         // Explicitly, so that an update turns a series on the server into a single
@@ -836,6 +872,19 @@ QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
         if (!recurrence.isEmpty()) {
             json.insert(QStringLiteral("recurrence"), recurrence);
         }
+    }
+    return json;
+}
+
+QJsonObject toJsonForUpdate(const KCalendarCore::Event::Ptr &event)
+{
+    QJsonObject json = toJson(event);
+    // Only a description that differs from the one read goes back. Without a
+    // fingerprint (cached before it existed) it counts as unchanged: the next
+    // re-listing brings one, and until then the server's body is safe.
+    const QString read = event->customProperty(kCustomApp.toByteArray(), kServerBody.toByteArray());
+    if (read.isEmpty() || read == bodyFingerprint(event)) {
+        json.remove(QStringLiteral("body"));
     }
     return json;
 }

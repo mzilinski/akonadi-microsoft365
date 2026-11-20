@@ -70,8 +70,9 @@ constexpr int kMillisecondsPerMinute = 60 * 1000;
 constexpr int kSignInRetrySeconds = 60;
 // Version of the event and task mapping. Raising it re-lists those collections once,
 // so that items cached by an older mapping are rebuilt. 1: event time zones, all
-// recurrence patterns, Windows zone names on tasks.
-constexpr int kPimMappingVersion = 1;
+// recurrence patterns, Windows zone names on tasks. 2: event bodies in full with a
+// fingerprint of what was read, the server's showAs kept.
+constexpr int kPimMappingVersion = 2;
 // Version of the mail sync state. 1: the stored deltaLinks no longer carry $top,
 // which capped every delta round at 200 messages.
 constexpr int kMailMappingVersion = 1;
@@ -1235,7 +1236,7 @@ void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partId
         auto incidence = item.payload<KCalendarCore::Incidence::Ptr>();
         auto event = incidence.dynamicCast<KCalendarCore::Event>();
         if (event) {
-            patchPimItem(item, QStringLiteral("/me/events/%1").arg(item.remoteId()), GraphEventHandler::toJson(event), replay);
+            patchPimItem(item, QStringLiteral("/me/events/%1").arg(item.remoteId()), GraphEventHandler::toJsonForUpdate(event), replay);
             return;
         }
     } else if (mime == GraphContactHandler::mimeType() && item.hasPayload<KContacts::Addressee>()) {

@@ -25,8 +25,13 @@ namespace GraphEventHandler
 /// Graph event JSON -> KCalendarCore::Event (returns null on missing id).
 [[nodiscard]] KCalendarCore::Event::Ptr toEvent(const QJsonObject &json);
 
-/// KCalendarCore::Event -> Graph event JSON (for create/update).
+/// KCalendarCore::Event -> Graph event JSON with every mapped field (for creating
+/// an event, also anew in another calendar).
 [[nodiscard]] QJsonObject toJson(const KCalendarCore::Event::Ptr &event);
+
+/// Like toJson(), for a PATCH of an existing event: leaves out what must not be sent
+/// back unchanged (the body, while the description is still the one read).
+[[nodiscard]] QJsonObject toJsonForUpdate(const KCalendarCore::Event::Ptr &event);
 
 /// Apply a Graph patternedRecurrence to an incidence (shared with the todo handler).
 /// The incidence's dtStart must already be set.

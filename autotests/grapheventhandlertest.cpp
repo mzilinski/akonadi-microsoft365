@@ -1044,6 +1044,116 @@ private Q_SLOTS:
         QVERIFY(json.contains(QLatin1String("recurrence")));
         QVERIFY(json.value(QLatin1String("recurrence")).isNull());
     }
+
+    // Review 2026-11, C1: an HTML body was read as its ~255-character bodyPreview and
+    // every PATCH wrote that back as plain text, so any edit lost a Teams join link.
+    static QJsonObject htmlEventJson()
+    {
+        QJsonObject json;
+        json.insert(QStringLiteral("id"), QStringLiteral("AAMkTeams"));
+        json.insert(QStringLiteral("subject"), QStringLiteral("Weekly sync"));
+        QJsonObject body;
+        body.insert(QStringLiteral("contentType"), QStringLiteral("html"));
+        body.insert(QStringLiteral("content"),
+                    QStringLiteral("<html><body><p>Agenda</p><a href=\"https://teams.microsoft.com/l/meetup-join/x\">Join</a></body></html>"));
+        json.insert(QStringLiteral("body"), body);
+        json.insert(QStringLiteral("bodyPreview"), QStringLiteral("Agenda Join"));
+        json.insert(QStringLiteral("start"), graphDateTime(QStringLiteral("2026-11-23T09:00:00.0000000")));
+        json.insert(QStringLiteral("end"), graphDateTime(QStringLiteral("2026-11-23T09:30:00.0000000")));
+        json.insert(QStringLiteral("showAs"), QStringLiteral("busy"));
+        return json;
+    }
+
+    // As Akonadi stores it: through iCalendar and back.
+    static Event::Ptr throughICal(const Event::Ptr &event)
+    {
+        ICalFormat format;
+        return format.fromString(format.toICalString(event)).dynamicCast<Event>();
+    }
+
+    void shouldReadAnHtmlBodyInFull()
+    {
+        const Event::Ptr event = GraphEventHandler::toEvent(htmlEventJson());
+        QVERIFY(event);
+        QVERIFY(event->descriptionIsRich());
+        QVERIFY(event->description().contains(QLatin1String("teams.microsoft.com/l/meetup-join")));
+    }
+
+    void shouldNotSendAnUnchangedBodyBack()
+    {
+        const Event::Ptr event = throughICal(GraphEventHandler::toEvent(htmlEventJson()));
+        QVERIFY(event);
+        event->setCategories({QStringLiteral("Work")});
+        const QJsonObject json = GraphEventHandler::toJsonForUpdate(event);
+        QVERIFY(!json.contains(QLatin1String("body")));
+        QCOMPARE(json.value(QLatin1String("categories")).toArray(), QJsonArray{QStringLiteral("Work")});
+    }
+
+    void shouldSendAChangedDescription()
+    {
+        const Event::Ptr event = throughICal(GraphEventHandler::toEvent(htmlEventJson()));
+        QVERIFY(event);
+        event->setDescription(QStringLiteral("New agenda"));
+        const QJsonObject body = GraphEventHandler::toJsonForUpdate(event).value(QLatin1String("body")).toObject();
+        QCOMPARE(body.value(QLatin1String("contentType")).toString(), QStringLiteral("text"));
+        QCOMPARE(body.value(QLatin1String("content")).toString(), QStringLiteral("New agenda"));
+    }
+
+    void shouldWriteARichDescriptionAsHtml()
+    {
+        const Event::Ptr event = GraphEventHandler::toEvent(htmlEventJson());
+        QVERIFY(event);
+        // Creating it anew (a move to another calendar) carries the whole body.
+        const QJsonObject body = GraphEventHandler::toJson(event).value(QLatin1String("body")).toObject();
+        QCOMPARE(body.value(QLatin1String("contentType")).toString(), QStringLiteral("html"));
+        QVERIFY(body.value(QLatin1String("content")).toString().contains(QLatin1String("meetup-join")));
+    }
+
+    void shouldKeepTheBodyOfAnEventCachedWithoutFingerprint()
+    {
+        // Cached by an older mapping: whether the description changed is unknown, and
+        // the server's body must not be replaced by a preview.
+        const QDateTime start(QDate(2026, 11, 23), QTime(9, 0), QTimeZone::utc());
+        Event::Ptr event(new Event);
+        event->setDtStart(start);
+        event->setDtEnd(start.addSecs(1800));
+        event->setDescription(QStringLiteral("Agenda Join"));
+        QVERIFY(!GraphEventHandler::toJsonForUpdate(event).contains(QLatin1String("body")));
+        QVERIFY(GraphEventHandler::toJson(event).contains(QLatin1String("body")));
+    }
+
+    // Review 2026-11, C4: tentative, oof and workingElsewhere were written back as busy.
+    void shouldKeepTheServersShowAs_data()
+    {
+        QTest::addColumn<QString>("server");
+        QTest::addColumn<bool>("makeTransparent");
+        QTest::addColumn<bool>("makeOpaque");
+        QTest::addColumn<QString>("expected");
+        QTest::newRow("oof kept") << QStringLiteral("oof") << false << false << QStringLiteral("oof");
+        QTest::newRow("tentative kept") << QStringLiteral("tentative") << false << false << QStringLiteral("tentative");
+        QTest::newRow("workingElsewhere kept") << QStringLiteral("workingElsewhere") << false << false << QStringLiteral("workingElsewhere");
+        QTest::newRow("oof made free") << QStringLiteral("oof") << true << false << QStringLiteral("free");
+        QTest::newRow("free made busy") << QStringLiteral("free") << false << true << QStringLiteral("busy");
+    }
+
+    void shouldKeepTheServersShowAs()
+    {
+        QFETCH(QString, server);
+        QFETCH(bool, makeTransparent);
+        QFETCH(bool, makeOpaque);
+        QFETCH(QString, expected);
+        QJsonObject json = htmlEventJson();
+        json.insert(QStringLiteral("showAs"), server);
+        const Event::Ptr event = throughICal(GraphEventHandler::toEvent(json));
+        QVERIFY(event);
+        if (makeTransparent) {
+            event->setTransparency(Event::Transparent);
+        }
+        if (makeOpaque) {
+            event->setTransparency(Event::Opaque);
+        }
+        QCOMPARE(GraphEventHandler::toJsonForUpdate(event).value(QLatin1String("showAs")).toString(), expected);
+    }
 };
 
 QTEST_GUILESS_MAIN(GraphEventHandlerTest)
