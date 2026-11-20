@@ -195,6 +195,9 @@ private:
     // A copy filed into Sent Items: adopt the one Graph filed itself when the message
     // went out through this account, upload it when it was sent some other way.
     void reconcileSentItem(const Akonadi::Item &item, const QString &messageId, bool sentViaGraph, const Replay &replay);
+    // A /send that ended Uncertain: success when its copy turns up in Sent Items,
+    // otherwise an error that says it may have gone out after all.
+    void confirmUncertainSend(const QString &id, const QString &messageId, const QString &error);
     // POST a mail item's MIME into a folder and commit the item with its new id.
     void uploadMailItem(const Akonadi::Item &item, const QString &folderRid, const Replay &replay);
     // Draft edits: Graph cannot replace MIME in place — recreate the draft, drop the old one.

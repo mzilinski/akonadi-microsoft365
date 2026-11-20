@@ -2394,12 +2394,46 @@ void GraphResource::sendMessage(const QString &id, const QByteArray &content)
                     }
                 });
                 del->start();
+                Q_EMIT messageSent(id, job->errorText());
+                return;
             }
-            Q_EMIT messageSent(id, job->errorText());
+            // Uncertain: Graph may have sent it, and an error invites a second send.
+            // Its copy in Sent Items tells; Exchange files it within moments.
+            confirmUncertainSend(id, messageId, job->errorText());
         });
         sendReq->start();
     });
     createReq->start();
+}
+
+void GraphResource::confirmUncertainSend(const QString &id, const QString &messageId, const QString &error)
+{
+    const QString uncertain = i18n("It is not certain whether the message was sent (%1). Look in Sent Items before sending it again.", error);
+    if (messageId.isEmpty()) {
+        Q_EMIT messageSent(id, uncertain);
+        return;
+    }
+    QTimer::singleShot(std::chrono::seconds(10), this, [this, id, messageId, uncertain] {
+        QString escapedId = messageId;
+        escapedId.replace(QLatin1Char('\''), QStringLiteral("''"));
+        const QString filter = QStringLiteral("internetMessageId eq '%1'").arg(escapedId);
+        auto req = new GraphRequest(mClient, this);
+        req->setPath(QStringLiteral("/me/mailFolders/sentitems/messages?$select=id&$top=1&$filter=%1").arg(QString::fromUtf8(QUrl::toPercentEncoding(filter))));
+        req->setFollowNextLink(false);
+        connect(req, &KJob::result, this, [this, req, id, messageId, uncertain](KJob *job) {
+            if (!job->error() && !req->aggregatedValue().isEmpty()) {
+                qCInfo(GRAPH_LOG) << "a send that ended uncertain went out: its copy is in Sent Items";
+                mGraphSentMessageIds.append(messageId);
+                while (mGraphSentMessageIds.size() > kMaxPendingSentCopies) {
+                    mGraphSentMessageIds.removeFirst();
+                }
+                Q_EMIT messageSent(id, QString());
+                return;
+            }
+            Q_EMIT messageSent(id, uncertain);
+        });
+        req->start();
+    });
 }
 
 void GraphResource::clearFolderSyncState()
