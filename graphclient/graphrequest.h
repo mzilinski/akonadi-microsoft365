@@ -13,10 +13,13 @@
 #pragma once
 
 #include <KJob>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QUrl>
+
+#include <optional>
 
 class GraphClient;
 
@@ -55,6 +58,10 @@ public:
     // collection remoteIds are not migrated.
     void setUseImmutableIds(bool use);
     void addHeader(const QByteArray &name, const QByteArray &value); // e.g. Prefer
+    /// Whether sending the request twice does no harm. Defaults to isRepeatable() of
+    /// the method; a POST that only reads (a /$batch of GETs) may say so.
+    void setRepeatable(bool repeatable);
+    [[nodiscard]] bool repeatable() const;
 
     void start() override;
 
@@ -76,14 +83,25 @@ public:
     /// How long to wait before repeating a throttled request: the server's Retry-After
     /// (capped, since a waiting request holds up the change replay), else a backoff.
     [[nodiscard]] static int retryDelaySeconds(int retryAfter, int attempt);
-    /// Failure class of an HTTP status the server answered with.
-    [[nodiscard]] static Failure failureForStatus(int httpStatus);
+    /// Failure class of an HTTP status the server answered with. 503 means "not
+    /// executed" only for a request that may be repeated: Graph's gateway can answer
+    /// 503 after the work was done, and a POST (create, move, send) must not run twice.
+    [[nodiscard]] static Failure failureForStatus(int httpStatus, bool repeatable = true);
+    /// GET, PUT, PATCH and DELETE end in the same state however often they are sent.
+    [[nodiscard]] static bool isRepeatable(Method method);
+    /// Seconds a Retry-After header asks for: delta-seconds or an HTTP date (RFC 9110);
+    /// 0 when absent, unreadable or already past.
+    [[nodiscard]] static int retryAfterSeconds(const QByteArray &value, const QDateTime &now);
+    /// Whether @p url may be sent the token: same scheme, host and port as @p baseUrl.
+    /// Links in answers (nextLink) and stored delta links are followed only there.
+    [[nodiscard]] static bool isOwnServer(const QUrl &url, const QString &baseUrl);
 
 private:
     void onReplyFinished();
     void issue(const QUrl &url);
     void scheduleRetry(int seconds, const QUrl &url); // 429 backoff
     void failUnreadable(int httpStatus);
+    void failForeignLink();
 
     GraphClient &mClient;
     Method mMethod = Method::Get;
@@ -104,4 +122,6 @@ private:
     QNetworkReply::NetworkError mNetworkError = QNetworkReply::NoError; // of the last reply
     bool mNotAuthenticated = false;
     bool mFollowingNextLink = false; // the current reply is a page a nextLink led to
+    std::optional<bool> mRepeatable; // unset: by the method
+    int mPages = 0; // pages read so far
 };

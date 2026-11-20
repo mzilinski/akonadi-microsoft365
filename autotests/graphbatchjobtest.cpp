@@ -455,6 +455,24 @@ private Q_SLOTS:
         QCOMPARE(server.served(), 4);
         QCOMPARE(job->responses().at(1).value(QLatin1String("id")).toString(), QStringLiteral("moved"));
     }
+
+    // Review 2026-11, I1: a 503 may come after the work was done; a move (POST) must
+    // not run twice, a delete may.
+    void shouldRepeatOnlyRepeatableCallsOn503()
+    {
+        FakeGraphServer server({503, 503});
+        LiveClient live(server);
+        const QList<GraphBatchJob::Call> calls{
+            {GraphRequest::Method::Post, QStringLiteral("/me/messages/id0/move"), QJsonObject{{QStringLiteral("destinationId"), QStringLiteral("archive")}}},
+            {GraphRequest::Method::Delete, QStringLiteral("/me/messages/id1"), {}},
+        };
+        auto job = new GraphBatchJob(live.client, calls, this);
+        QVERIFY(run(job));
+        QCOMPARE(server.batches(), 2);
+        QCOMPARE(server.served(), 3); // the delete twice, the move once
+        QCOMPARE(job->succeeded(), 1);
+        QCOMPARE(job->failed(GraphRequest::Failure::Uncertain), 1);
+    }
 };
 
 QTEST_GUILESS_MAIN(GraphBatchJobTest)

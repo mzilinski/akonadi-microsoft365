@@ -13,6 +13,8 @@
 #include <QSet>
 #include <QTimer>
 
+#include <algorithm>
+
 // Graph's /$batch accepts at most 20 sub-requests per call.
 static constexpr int kBatchSize = 20;
 // A sub-request answered with 429/503 is re-issued this often before it counts as
@@ -105,6 +107,10 @@ void GraphBatchJob::issueNextBatch()
     req->setMethod(GraphRequest::Method::Post);
     req->setPath(QStringLiteral("/$batch"));
     req->setBody(body);
+    // The batch may be sent again as a whole only when every call in it may.
+    req->setRepeatable(std::all_of(indexes.cbegin(), indexes.cend(), [this](int i) {
+        return GraphRequest::isRepeatable(mCalls.at(i).method);
+    }));
     connect(req, &KJob::result, this, [this, req, indexes](KJob *job) {
         if (job->error()) {
             // The server itself did not answer (no token yet, network gone, or the
@@ -130,10 +136,12 @@ void GraphBatchJob::issueNextBatch()
             }
             answered.insert(index);
             const int status = resp.value(QLatin1String("status")).toInt();
-            if ((status == 429 || status == 503) && mThrottleRetries.value(index) < kMaxThrottleRetries) {
+            const bool repeatable = GraphRequest::isRepeatable(mCalls.at(index).method);
+            if ((status == 429 || (status == 503 && repeatable)) && mThrottleRetries.value(index) < kMaxThrottleRetries) {
                 ++mThrottleRetries[index];
                 throttled.append(index);
-                retryAfter = qMax(retryAfter, resp.value(QLatin1String("headers")).toObject().value(QLatin1String("Retry-After")).toString().toInt());
+                const QString header = resp.value(QLatin1String("headers")).toObject().value(QLatin1String("Retry-After")).toString();
+                retryAfter = qMax(retryAfter, GraphRequest::retryAfterSeconds(header.toLatin1(), QDateTime::currentDateTimeUtc()));
                 continue;
             }
             finishCall(index, status, resp.value(QLatin1String("body")).toObject());
@@ -178,7 +186,7 @@ void GraphBatchJob::finishCall(int index, int status, const QJsonObject &body)
     const QJsonObject err = body.value(QLatin1String("error")).toObject();
     failCall(KJob::UserDefinedError,
              err.isEmpty() ? i18n("HTTP %1", status) : GraphRequest::formatError(err, status),
-             GraphRequest::failureForStatus(status),
+             GraphRequest::failureForStatus(status, GraphRequest::isRepeatable(mCalls.at(index).method)),
              status == 401);
 }
 

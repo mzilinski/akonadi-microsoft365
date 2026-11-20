@@ -1496,6 +1496,9 @@ void GraphResource::postPimItem(const Akonadi::Item &item, const QString &path, 
     req->setMethod(GraphRequest::Method::Post);
     req->setPath(path);
     req->setBody(body);
+    // An event goes with a transactionId, so Graph makes it only once however often
+    // it is sent; that create may also be repeated on a 503.
+    req->setRepeatable(repeatable);
     connect(req, &KJob::result, this, [this, item, req, repeatable, replay](KJob *job) {
         if (retryLater(job, replay, repeatable, false)) {
             return;
