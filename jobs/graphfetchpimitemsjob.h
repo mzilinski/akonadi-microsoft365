@@ -18,6 +18,7 @@
 #include <KCalendarCore/Event>
 #include <KJob>
 #include <QHash>
+#include <QSet>
 #include <QStringList>
 
 class GraphBatchJob;
@@ -63,7 +64,8 @@ private:
     void resolveContactsFolderThenStart();
     void fetchPhotos();
     void fetchExceptionIds();
-    [[nodiscard]] static bool failsTheRound(const GraphBatchJob *batch);
+    void finishExceptions();
+    [[nodiscard]] bool failsTheRound(const GraphBatchJob *batch) const;
     void fetchExceptions(const QList<QPair<QString, QString>> &exceptions); // (master id, exception id)
 
     GraphClient &mClient;
@@ -75,4 +77,5 @@ private:
     Akonadi::Item::List mRemoved;
     QHash<QString, KCalendarCore::Event::Ptr> mMasters; // series of this round, by id
     QHash<QString, QStringList> mSeriesExceptions;
+    QSet<QString> mUnstatedMasters; // series whose occurrences could not be asked this round
 };

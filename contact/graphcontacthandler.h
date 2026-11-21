@@ -18,6 +18,10 @@ namespace GraphContactHandler
 [[nodiscard]] QString mimeType();
 
 [[nodiscard]] KContacts::Addressee toAddressee(const QJsonObject &json);
+/// The phone numbers for which Graph has no place left (one mobile, two business and
+/// two home numbers), which toJson() leaves out.
+[[nodiscard]] QStringList phonesBeyondLimit(const KContacts::Addressee &a);
+
 /// The e-mail addresses beyond the three Graph keeps (the preferred one first), which
 /// toJson() leaves out.
 [[nodiscard]] QStringList emailsBeyondLimit(const KContacts::Addressee &a);

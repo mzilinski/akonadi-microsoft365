@@ -61,6 +61,7 @@ void GraphBatchJob::start()
     mResponses = QList<QJsonObject>(mCalls.size());
     mBodies = QList<QJsonValue>(mCalls.size(), QJsonValue(QJsonValue::Undefined));
     mHeaders = QList<QJsonObject>(mCalls.size());
+    mStatuses = QList<int>(mCalls.size(), 0);
     if (mCalls.isEmpty()) {
         // Stay asynchronous like every other exit of this job, so a caller that
         // connects after start() cannot miss the result (same as GraphRequest).
@@ -118,7 +119,8 @@ void GraphBatchJob::issueNextBatch()
             // The server itself did not answer (no token yet, network gone, or the
             // batch was rejected as a whole): nothing further will get through either,
             // so account for every remaining call and stop.
-            for (int i = 0; i < indexes.size() + mPending.size(); ++i) {
+            for (const int i : indexes + mPending) {
+                mStatuses[i] = req->httpStatus();
                 failCall(job->error(), job->errorText(), req->failure(), req->authenticationRejected());
             }
             mPending.clear();
@@ -174,6 +176,7 @@ void GraphBatchJob::issueNextBatch()
 void GraphBatchJob::finishCall(int index, int status, const QJsonValue &bodyValue, const QJsonObject &headers)
 {
     const QJsonObject body = bodyValue.toObject();
+    mStatuses[index] = status;
     if (status >= 200 && status < 300) {
         mResponses[index] = body;
         mBodies[index] = bodyValue;
@@ -233,6 +236,11 @@ QList<QJsonObject> GraphBatchJob::responses() const
 QList<QJsonValue> GraphBatchJob::bodies() const
 {
     return mBodies;
+}
+
+QList<int> GraphBatchJob::statuses() const
+{
+    return mStatuses;
 }
 
 QList<QJsonObject> GraphBatchJob::headers() const

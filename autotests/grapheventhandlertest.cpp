@@ -1333,6 +1333,21 @@ private Q_SLOTS:
         QCOMPARE(exception->recurrenceId().date(), QDate(2027, 3, 2));
     }
 
+    void shouldTakeTheStartZoneOfASeriesWithoutAStoredZone()
+    {
+        // Made in KOrganizer and not read back yet: no SERIES-ZONE. QTimeZone of an
+        // empty id is the system zone, which must not stand in for the series' own
+        // (found in review).
+        const QTimeZone newYork("America/New_York");
+        Event::Ptr series(new Event);
+        series->setDtStart(QDateTime(QDate(2027, 3, 1), QTime(20, 0), newYork));
+        series->setDtEnd(QDateTime(QDate(2027, 3, 1), QTime(20, 30), newYork));
+        series->recurrence()->setDaily(1);
+        QCOMPARE(GraphEventHandler::seriesZone(series), newYork);
+        // 01:00 UTC on 3 March is the 2 March occurrence in New York.
+        QCOMPARE(GraphEventHandler::originalDay(series, QDateTime::fromString(QStringLiteral("2027-03-03T01:00:00Z"), Qt::ISODate)), QDate(2027, 3, 2));
+    }
+
     void shouldCountTheDaysOfATimedSeriesInItsZone()
     {
         // 00:30 in Berlin is the day before in UTC; Graph names it by the Berlin day.

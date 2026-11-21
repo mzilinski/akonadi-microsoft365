@@ -1917,13 +1917,21 @@ void GraphResource::createMovedCopy(const Item::List &items,
 
 void GraphResource::warnAboutUnsavedContactFields(const KContacts::Addressee &addressee)
 {
-    const QStringList dropped = GraphContactHandler::emailsBeyondLimit(addressee);
-    if (!dropped.isEmpty()) {
-        // The next sync brings the contact back as the server has it, without them.
+    // The next sync brings the contact back as the server has it, without them.
+    const QStringList emails = GraphContactHandler::emailsBeyondLimit(addressee);
+    if (!emails.isEmpty()) {
         Q_EMIT warning(i18np("Microsoft 365 keeps at most three e-mail addresses per contact; %2 was not saved for %3.",
                              "Microsoft 365 keeps at most three e-mail addresses per contact; %2 were not saved for %3.",
-                             dropped.size(),
-                             dropped.join(QStringLiteral(", ")),
+                             emails.size(),
+                             emails.join(QStringLiteral(", ")),
+                             addressee.realName()));
+    }
+    const QStringList phones = GraphContactHandler::phonesBeyondLimit(addressee);
+    if (!phones.isEmpty()) {
+        Q_EMIT warning(i18np("Microsoft 365 keeps one mobile, two business and two home numbers per contact; %2 was not saved for %3.",
+                             "Microsoft 365 keeps one mobile, two business and two home numbers per contact; %2 were not saved for %3.",
+                             phones.size(),
+                             phones.join(QStringLiteral(", ")),
                              addressee.realName()));
     }
 }

@@ -208,6 +208,82 @@ private Q_SLOTS:
         // Uncertain: the round fails, so that its delta link is not saved.
         QVERIFY(r.error != 0);
     }
+
+    // Found in review: a full listing deletes whatever it does not list, so a series
+    // whose occurrences could not be asked must fail it (the mapping version bump
+    // makes the next round of every calendar a full listing).
+    void shouldFailAFullListingWhenASeriesIsRefused()
+    {
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const QByteArray refused =
+            QByteArrayLiteral("{\"responses\":[{\"id\":\"0\",\"status\":403,\"body\":{\"error\":{\"code\":\"ErrorAccessDenied\",\"message\":\"no\"}}}]}");
+        const Run r = run({{200, delta}, {200, refused}}, {}, GraphFetchPimItemsJob::Type::Events);
+        QVERIFY(r.error != 0);
+    }
+
+    void shouldFailTheRoundOnABatchRefusedAsAWhole()
+    {
+        // The /$batch itself answered 400: every call counts as refused, which is no
+        // statement about any series; in a full listing that must not delete them all.
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const Run r =
+            run({{200, delta}, {400, QByteArrayLiteral("{\"error\":{\"code\":\"BadRequest\",\"message\":\"no\"}}")}}, {}, GraphFetchPimItemsJob::Type::Events);
+        QVERIFY(r.error != 0);
+    }
+
+    void shouldNotTakeAnUnlistedStatusForRefusedForGood()
+    {
+        // 423 (locked) and the like pass: they fail an incremental round too.
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const QByteArray locked = QByteArrayLiteral("{\"responses\":[{\"id\":\"0\",\"status\":423,\"body\":{}}]}");
+        const Run r = run({{200, delta}, {200, locked}}, QStringLiteral("/delta?token=1"), GraphFetchPimItemsJob::Type::Events);
+        QVERIFY(r.error != 0);
+    }
+
+    void shouldKeepASeriesWithoutStatementWhenOneOccurrenceIsRefused()
+    {
+        // A refused, B gone, C fine: no statement about the series (found in review:
+        // the removal of the statement was undone by B, and C was deleted).
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"iCalUId\":\"UID\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const QByteArray ids = QByteArrayLiteral(
+            "{\"responses\":[{\"id\":\"0\",\"status\":200,\"body\":{\"id\":\"MASTER\",\"exceptionOccurrences\":[{\"id\":\"A\"},{\"id\":\"B\"},{\"id\":\"C\"}]}}"
+            "]}");
+        const QByteArray occurrences = QByteArrayLiteral(
+            "{\"responses\":["
+            "{\"id\":\"0\",\"status\":403,\"body\":{\"error\":{\"code\":\"ErrorAccessDenied\",\"message\":\"no\"}}},"
+            "{\"id\":\"1\",\"status\":404,\"body\":{\"error\":{\"code\":\"ErrorItemNotFound\",\"message\":\"gone\"}}},"
+            "{\"id\":\"2\",\"status\":200,\"body\":{\"id\":\"C\",\"type\":\"exception\",\"subject\":\"Later\","
+            "\"originalStart\":\"2027-03-03T09:00:00Z\","
+            "\"start\":{\"dateTime\":\"2027-03-03T15:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-03T15:30:00.0000000\",\"timeZone\":\"UTC\"}}}]}");
+        const Run r = run({{200, delta}, {200, ids}, {200, occurrences}}, QStringLiteral("/delta?token=1"), GraphFetchPimItemsJob::Type::Events);
+        QCOMPARE(r.error, 0);
+        QVERIFY(!r.series.contains(QStringLiteral("MASTER")));
+    }
 };
 
 QTEST_GUILESS_MAIN(GraphFetchPimItemsJobTest)

@@ -203,9 +203,36 @@ private Q_SLOTS:
         a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("6"), KContacts::PhoneNumber::Home));
         const QJsonObject json = GraphContactHandler::toJson(a);
         QCOMPARE(json.value(QLatin1String("mobilePhone")).toString(), QStringLiteral("5"));
-        QCOMPARE(json.value(QLatin1String("homePhones")).toArray(), QJsonArray{QStringLiteral("6")});
-        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(),
-                 (QJsonArray{QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("3"), QStringLiteral("4")}));
+        // Two business numbers at most (Graph rejects three, live-checked): the work
+        // number first, then the fax; what is left takes the free home place, then is
+        // given up (and named in a warning).
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), (QJsonArray{QStringLiteral("1"), QStringLiteral("2")}));
+        QCOMPARE(json.value(QLatin1String("homePhones")).toArray(), (QJsonArray{QStringLiteral("6"), QStringLiteral("3")}));
+        QCOMPARE(GraphContactHandler::phonesBeyondLimit(a), QStringList{QStringLiteral("4")});
+    }
+
+    void shouldNeverSendMoreThanTwoNumbersOfAKind()
+    {
+        KContacts::Addressee a;
+        for (int i = 0; i < 3; ++i) {
+            a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("w%1").arg(i), KContacts::PhoneNumber::Work));
+            a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h%1").arg(i), KContacts::PhoneNumber::Home));
+        }
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray().size(), 2);
+        QCOMPARE(json.value(QLatin1String("homePhones")).toArray().size(), 2);
+        QCOMPARE(GraphContactHandler::phonesBeyondLimit(a).size(), 2);
+    }
+
+    void shouldKeepAWorkNumberEqualToTheMobileOne()
+    {
+        // Found in review: the same number as work and as mobile lost the work entry.
+        KContacts::Addressee a;
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("5"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("5"), KContacts::PhoneNumber::Cell));
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QCOMPARE(json.value(QLatin1String("mobilePhone")).toString(), QStringLiteral("5"));
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), QJsonArray{QStringLiteral("5")});
     }
 
     void shouldNameTheEmailAddressesGraphCannotKeep()

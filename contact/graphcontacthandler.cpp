@@ -70,6 +70,71 @@ QJsonObject emptyAddress()
 {
     return addressToJson(Address());
 }
+
+// Graph keeps one mobile number and at most two business and two home numbers
+// (checked live: three are rejected with ErrorInvalidProperty, failing the whole
+// edit).
+constexpr qsizetype kMaxPhonesPerKind = 2;
+
+struct PhoneSlots {
+    QString mobile;
+    QStringList business;
+    QStringList home;
+    QStringList dropped; // no place left
+};
+
+PhoneSlots placePhones(const Addressee &a)
+{
+    PhoneSlots slots;
+    const auto phones = a.phoneNumbers();
+    // The preferred mobile number goes to mobilePhone, else the first one.
+    qsizetype mobileIndex = -1;
+    for (qsizetype i = 0; i < phones.size(); ++i) {
+        const PhoneNumber &p = phones.at(i);
+        if (p.number().isEmpty() || !(p.type() & PhoneNumber::Cell)) {
+            continue;
+        }
+        if (mobileIndex < 0 || p.type().testFlag(PhoneNumber::Pref)) {
+            slots.mobile = p.number();
+            mobileIndex = i;
+            if (p.type().testFlag(PhoneNumber::Pref)) {
+                break;
+            }
+        }
+    }
+    // Everything else, real work numbers before those without a place of their own
+    // (fax, pager, further mobile numbers): left out of the PATCH, a number would
+    // vanish locally with the next sync, which brings the contact back as the server
+    // has it. Only that one entry is skipped, not every entry of the same number.
+    QStringList work, others, home;
+    for (qsizetype i = 0; i < phones.size(); ++i) {
+        const PhoneNumber &p = phones.at(i);
+        if (p.number().isEmpty() || i == mobileIndex) {
+            continue;
+        }
+        const bool noPlace = p.type() & (PhoneNumber::Fax | PhoneNumber::Pager | PhoneNumber::Cell | PhoneNumber::Modem | PhoneNumber::Bbs | PhoneNumber::Msg);
+        if ((p.type() & PhoneNumber::Home) && !noPlace) {
+            home << p.number();
+        } else if (noPlace) {
+            others << p.number();
+        } else {
+            work << p.number();
+        }
+    }
+    QStringList forBusiness = work + others;
+    slots.business = forBusiness.mid(0, kMaxPhonesPerKind);
+    slots.home = home.mid(0, kMaxPhonesPerKind);
+    // What did not fit takes a free place of the other kind before it is given up.
+    QStringList overflow = forBusiness.mid(kMaxPhonesPerKind) + home.mid(kMaxPhonesPerKind);
+    while (!overflow.isEmpty() && slots.home.size() < kMaxPhonesPerKind) {
+        slots.home << overflow.takeFirst();
+    }
+    while (!overflow.isEmpty() && slots.business.size() < kMaxPhonesPerKind) {
+        slots.business << overflow.takeFirst();
+    }
+    slots.dropped = overflow;
+    return slots;
+}
 } // namespace
 
 namespace GraphContactHandler
@@ -166,6 +231,11 @@ KContacts::Addressee toAddressee(const QJsonObject &json)
     return a;
 }
 
+QStringList phonesBeyondLimit(const KContacts::Addressee &a)
+{
+    return placePhones(a).dropped;
+}
+
 QStringList emailsBeyondLimit(const KContacts::Addressee &a)
 {
     Email::List emailList = a.emailList();
@@ -224,34 +294,10 @@ QJsonObject toJson(const KContacts::Addressee &a)
     }
     json.insert(QStringLiteral("emailAddresses"), emails);
 
-    // Graph has business and home numbers and one mobile number. The preferred mobile
-    // number goes there; other mobile, fax, pager and further numbers have no place of
-    // their own and go with the business numbers: left out, they would vanish locally
-    // with the next sync, which brings the contact back as the server has it.
-    QJsonArray business, home;
-    const auto phones = a.phoneNumbers();
-    QString mobile;
-    for (const PhoneNumber &p : phones) {
-        if (p.number().isEmpty() || !(p.type() & PhoneNumber::Cell)) {
-            continue;
-        }
-        if (mobile.isEmpty() || p.type().testFlag(PhoneNumber::Pref)) {
-            mobile = p.number();
-            if (p.type().testFlag(PhoneNumber::Pref)) {
-                break;
-            }
-        }
-    }
-    for (const PhoneNumber &p : phones) {
-        if (p.number().isEmpty() || p.number() == mobile) {
-            continue;
-        }
-        if ((p.type() & PhoneNumber::Home) && !(p.type() & (PhoneNumber::Fax | PhoneNumber::Pager | PhoneNumber::Cell))) {
-            home.append(p.number());
-        } else {
-            business.append(p.number());
-        }
-    }
+    const PhoneSlots slots = placePhones(a);
+    const QJsonArray business = QJsonArray::fromStringList(slots.business);
+    const QJsonArray home = QJsonArray::fromStringList(slots.home);
+    const QString mobile = slots.mobile;
     json.insert(QStringLiteral("businessPhones"), business);
     json.insert(QStringLiteral("homePhones"), home);
     const QStringList had = serverHad(a);

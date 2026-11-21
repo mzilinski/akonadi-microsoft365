@@ -914,8 +914,15 @@ KCalendarCore::Event::Ptr toException(const QJsonObject &json, const KCalendarCo
 
 QTimeZone seriesZone(const KCalendarCore::Event::Ptr &master)
 {
-    const QTimeZone zone(master->customProperty(kCustomApp.toByteArray(), kSeriesZone.toByteArray()).toLatin1());
-    return zone.isValid() ? zone : master->dtStart().timeZone();
+    // QTimeZone(QByteArray()) is the system zone, not an invalid one: look first.
+    const QString id = master->customProperty(kCustomApp.toByteArray(), kSeriesZone.toByteArray());
+    if (!id.isEmpty()) {
+        const QTimeZone zone(id.toLatin1());
+        if (zone.isValid()) {
+            return zone;
+        }
+    }
+    return master->dtStart().timeZone();
 }
 
 QDate originalDay(const KCalendarCore::Event::Ptr &master, const QDateTime &originalStart)
