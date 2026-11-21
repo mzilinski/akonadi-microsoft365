@@ -18,6 +18,13 @@
 
 #include <QHash>
 
+#include <memory>
+
+namespace KMime
+{
+class Message;
+}
+
 class OrgKdeAkonadiGraphResourceInterface;
 
 class GraphMtaResource : public Akonadi::ResourceWidgetBase, public Akonadi::TransportResourceBase
@@ -43,6 +50,7 @@ protected Q_SLOTS:
     }
 
 private:
+    void send(const Akonadi::Item &item, const std::shared_ptr<KMime::Message> &msg);
     void messageSent(const QString &id, const QString &error);
     [[nodiscard]] bool connectToMasterResource();
 

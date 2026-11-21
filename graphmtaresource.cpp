@@ -10,6 +10,8 @@
 #include "graphresourceinterface.h"
 
 #include <Akonadi/AddressAttribute>
+#include <Akonadi/ItemFetchJob>
+#include <Akonadi/ItemFetchScope>
 #include <KConfigGroup>
 #include <KLocalizedString>
 #include <KMime/Message>
@@ -91,17 +93,30 @@ void GraphMtaResource::sendItem(const Akonadi::Item &item)
         return;
     }
 
+    // Bcc recipients that only the envelope names (MailTransport keeps them in the
+    // item's AddressAttribute) would get nothing: Graph has no envelope. The item
+    // handed to sendItem() carries only its payload, so fetch the envelope here.
+    auto fetch = new ItemFetchJob(item, this);
+    fetch->fetchScope().fetchAttribute<AddressAttribute>();
+    connect(fetch, &KJob::result, this, [this, item, msg, fetch] {
+        if (fetch->error() || fetch->items().isEmpty()) {
+            itemSent(item, TransportFailed, i18n("Could not read the recipients of the message: %1", fetch->errorText()));
+            return;
+        }
+        if (const auto *addresses = fetch->items().constFirst().attribute<AddressAttribute>()) {
+            GraphMailHandler::addMissingBcc(*msg, addresses->bcc());
+        }
+        send(item, msg);
+    });
+}
+
+void GraphMtaResource::send(const Akonadi::Item &item, const std::shared_ptr<KMime::Message> &msg)
+{
     // The key is an opaque correlation token for the sendMessage/messageSent D-Bus
     // round trip. Item::id is always set and unique; the remoteId belongs to whichever
     // resource owns the outbox folder and may be empty (unlike in the EWS MTA).
     const QString id = QString::number(item.id());
     mItemHash.insert(id, item);
-
-    // Bcc recipients that only the envelope names (MailTransport keeps them in the
-    // item's AddressAttribute) would get nothing: Graph has no envelope.
-    if (const auto *addresses = item.attribute<Akonadi::AddressAttribute>()) {
-        GraphMailHandler::addMissingBcc(*msg, addresses->bcc());
-    }
 
     /* Exchange re-assembles the message from parsed MIME parts and mangles
      * quoted-printable bodies (KMail's preferred encoding) in the process.
