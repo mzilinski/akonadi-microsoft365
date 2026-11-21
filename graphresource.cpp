@@ -1104,19 +1104,45 @@ void GraphResource::deliverItemsIncremental(const Collection &collection,
                 removedIds.insert(item.remoteId());
             }
             const QString prefix = GraphFetchPimItemsJob::exceptionRevision(QString());
+            Item::List ofRemovedSeries;
             for (const Item &item : items) {
                 if (!item.remoteRevision().startsWith(prefix) || removedIds.contains(item.remoteId())) {
                     continue;
                 }
                 const QString master = item.remoteRevision().mid(prefix.size());
                 const auto listed = seriesExceptions.constFind(master);
-                if (removedIds.contains(master) || (listed != seriesExceptions.cend() && !listed->contains(item.remoteId()))) {
+                if (removedIds.contains(master)) {
+                    ofRemovedSeries.append(item);
+                } else if (listed != seriesExceptions.cend() && !listed->contains(item.remoteId())) {
                     Item gone;
                     gone.setRemoteId(item.remoteId());
                     knownRemoved.append(gone);
                 }
             }
-            syncItemsIncremental(collection, changed, knownRemoved, deltaLink, generation);
+            if (ofRemovedSeries.isEmpty()) {
+                syncItemsIncremental(collection, changed, knownRemoved, deltaLink, generation);
+                return;
+            }
+            // A calendar that sees a series go deletes the occurrences it still holds
+            // through Akonadi itself (akonadi-calendar's CalendarBase), and reports an
+            // error for each one already gone along with it. Remove them first, so the
+            // series goes alone.
+            auto drop = new ItemDeleteJob(ofRemovedSeries, this);
+            connect(drop, &KJob::result, this, [this, collection, changed, knownRemoved, ofRemovedSeries, deltaLink, generation](KJob *job) {
+                if (isStale(generation)) {
+                    return;
+                }
+                Item::List all = knownRemoved;
+                if (job->error()) {
+                    qCWarning(GRAPH_LOG) << "could not remove the changed occurrences of a deleted series first:" << job->errorText();
+                    for (const Item &item : ofRemovedSeries) {
+                        Item gone;
+                        gone.setRemoteId(item.remoteId());
+                        all.append(gone);
+                    }
+                }
+                syncItemsIncremental(collection, changed, all, deltaLink, generation);
+            });
         });
         return;
     }
