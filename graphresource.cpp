@@ -106,6 +106,44 @@ CollectionKind collectionKind(const Akonadi::Collection &col)
     }
     return CollectionKind::Mail;
 }
+
+// Akonadi wants the names of a collection's children unique (UNIQUE(parentId, name));
+// Microsoft 365 does not: a calendar, a task list and a mail folder may share one.
+// Inserting a clashing name fails the whole tree sync, and no new collection arrives
+// any more. A calendar, contacts folder or task list whose name is taken already gets
+// its kind beside it as its Akonadi name and shows its server name as display name
+// (which collectionChanged() then sends on a rename); any other has none.
+void giveUniqueNames(Collection::List &extra, QSet<QString> taken)
+{
+    for (Collection &col : extra) {
+        const QString name = col.name();
+        auto *display = col.attribute<EntityDisplayAttribute>(Collection::AddIfMissing);
+        display->setDisplayName(QString());
+        if (taken.contains(name)) {
+            display->setDisplayName(name);
+            QString kind;
+            switch (collectionKind(col)) {
+            case CollectionKind::Calendar:
+                kind = i18nc("@item kind of a collection, to tell it from one of the same name", "calendar");
+                break;
+            case CollectionKind::Todo:
+                kind = i18nc("@item kind of a collection, to tell it from one of the same name", "tasks");
+                break;
+            case CollectionKind::Contacts:
+                kind = i18nc("@item kind of a collection, to tell it from one of the same name", "contacts");
+                break;
+            case CollectionKind::Mail:
+                break;
+            }
+            QString unique = i18nc("@item collection name: name (kind)", "%1 (%2)", name, kind);
+            for (int n = 2; taken.contains(unique); ++n) {
+                unique = i18nc("@item collection name: name (kind number)", "%1 (%2 %3)", name, kind, n);
+            }
+            col.setName(unique);
+        }
+        taken.insert(col.name());
+    }
+}
 }
 
 GraphResource::GraphResource(const QString &id)
@@ -866,23 +904,23 @@ void GraphResource::fetchFoldersJobFinished(KJob *job, quint64 generation)
         for (Collection &col : changed) {
             applySpecialAttributes(col);
         }
-        changed.append(extra);
         Collection::List removed = fj->removedCollections();
         for (const QString &gone : mKnownExtraIds - currentExtraIds) {
             Collection col;
             col.setRemoteId(gone);
             removed.append(col);
         }
-        if (removed.isEmpty()) {
-            collectionsRetrievedIncremental(changed, removed);
-        } else {
-            deliverIncrementalTree(changed, removed, generation);
-        }
+        deliverIncrementalTree(changed, extra, removed, generation);
     } else {
         Collection::List cols = fj->allCollections();
+        QSet<QString> taken;
         for (Collection &col : cols) {
             applySpecialAttributes(col);
+            if (col.parentCollection().remoteId() == mRootCollection.remoteId()) {
+                taken.insert(col.name());
+            }
         }
+        giveUniqueNames(extra, taken);
         cols.prepend(mRootCollection);
         cols.append(extra);
         collectionsRetrieved(cols);
@@ -890,26 +928,45 @@ void GraphResource::fetchFoldersJobFinished(KJob *job, quint64 generation)
     mKnownExtraIds = currentExtraIds;
 }
 
-void GraphResource::deliverIncrementalTree(const Akonadi::Collection::List &changed, const Akonadi::Collection::List &removed, quint64 generation)
+void GraphResource::deliverIncrementalTree(const Akonadi::Collection::List &changed,
+                                           Akonadi::Collection::List extra,
+                                           const Akonadi::Collection::List &removed,
+                                           quint64 generation)
 {
     // CollectionSync matches a removed collection only inside its parent's bucket, so
     // a tombstone carrying just the remote id is silently dropped. Resolve each one to
     // the locally cached collection (whose parent chain is intact) before delivering.
+    // The mail folders an incremental delta does not mention are needed too, for the
+    // names the extra collections must not take.
     auto fetch = new CollectionFetchJob(Collection::root(), CollectionFetchJob::Recursive, this);
     fetch->fetchScope().setResource(identifier());
     fetch->fetchScope().setAncestorRetrieval(CollectionFetchScope::Parent);
-    connect(fetch, &CollectionFetchJob::result, this, [this, changed, removed, generation](KJob *job) {
+    connect(fetch, &CollectionFetchJob::result, this, [this, changed, extra, removed, generation](KJob *job) mutable {
         if (isStale(generation)) {
             return;
         }
         Collection::List resolved;
+        QSet<QString> taken;
         if (job->error()) {
             qCWarning(GRAPH_LOG) << "could not resolve removed collections:" << job->errorText();
         } else {
+            QSet<QString> skip; // the mail folders delivered or removed now, and the extras
+            for (const Collection &col : std::as_const(changed)) {
+                skip.insert(col.remoteId());
+            }
+            for (const Collection &col : removed) {
+                skip.insert(col.remoteId());
+            }
+            for (const Collection &col : std::as_const(extra)) {
+                skip.insert(col.remoteId());
+            }
             QHash<QString, Collection> byRid;
             const auto locals = qobject_cast<CollectionFetchJob *>(job)->collections();
             for (const Collection &col : locals) {
                 byRid.insert(col.remoteId(), col);
+                if (!skip.contains(col.remoteId()) && col.parentCollection().remoteId() == mRootCollection.remoteId()) {
+                    taken.insert(col.name());
+                }
             }
             for (const Collection &col : removed) {
                 const auto it = byRid.constFind(col.remoteId());
@@ -919,7 +976,15 @@ void GraphResource::deliverIncrementalTree(const Akonadi::Collection::List &chan
             }
             qCDebug(GRAPH_LOG) << "resolved" << resolved.size() << "of" << removed.size() << "removed collections";
         }
-        collectionsRetrievedIncremental(changed, resolved);
+        for (const Collection &col : std::as_const(changed)) {
+            if (col.parentCollection().remoteId() == mRootCollection.remoteId()) {
+                taken.insert(col.name());
+            }
+        }
+        giveUniqueNames(extra, taken);
+        Collection::List all = changed;
+        all.append(extra);
+        collectionsRetrievedIncremental(all, resolved);
     });
 }
 
@@ -2299,7 +2364,11 @@ void GraphResource::collectionChanged(const Collection &collection, const QSet<Q
     if (!startReplay(-collection.id(), replay)) {
         return;
     }
-    if (!changedAttributes.contains("NAME")) {
+    // A collection named apart from one of the same name (giveUniqueNames()) is
+    // renamed through its display name: Akonadi's properties dialog changes only that.
+    const auto *display = collection.attribute<EntityDisplayAttribute>();
+    const QString displayName = display && collectionKind(collection) != CollectionKind::Mail ? display->displayName() : QString();
+    if (!changedAttributes.contains("NAME") && (displayName.isEmpty() || !changedAttributes.contains("ENTITYDISPLAY"))) {
         changeProcessed(); // only renames are propagated to Graph
         return;
     }
@@ -2321,7 +2390,7 @@ void GraphResource::collectionChanged(const Collection &collection, const QSet<Q
         break;
     }
     QJsonObject body;
-    body.insert(nameField, collection.name());
+    body.insert(nameField, displayName.isEmpty() ? collection.name() : displayName);
     auto req = new GraphRequest(mClient, this);
     req->setMethod(GraphRequest::Method::Patch);
     req->setPath(path);

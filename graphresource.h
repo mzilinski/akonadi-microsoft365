@@ -185,7 +185,10 @@ private:
     void fetchFolderTree(quint64 generation);
     // Resolve removed-collection tombstones against the local cache before delivery —
     // CollectionSync drops removed entries whose parent is unknown.
-    void deliverIncrementalTree(const Akonadi::Collection::List &changed, const Akonadi::Collection::List &removed, quint64 generation);
+    void deliverIncrementalTree(const Akonadi::Collection::List &changed,
+                                Akonadi::Collection::List extra,
+                                const Akonadi::Collection::List &removed,
+                                quint64 generation);
     void fetchExtraCollections(quint64 generation); // calendars + contacts + todo lists
     // Continues fetchExtraCollections(); mExtraCollections is only replaced once both
     // list requests have succeeded, so a transient failure cannot surface as deletions.
