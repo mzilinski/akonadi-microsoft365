@@ -133,22 +133,30 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
     }
     mDeltaLink = req->deltaLink();
 
+    // An id listed twice in a round (paging can do that): the later entry holds,
+    // whether it is a change or a tombstone. The entries are collected by id first and
+    // laid out in their order afterwards, so that this costs no scan per entry.
+    QHash<QString, QJsonObject> latest;
+    QStringList order;
     for (const auto &v : req->aggregatedValue()) {
         const QJsonObject obj = v.toObject();
         const QString id = obj.value(QLatin1String("id")).toString();
         if (id.isEmpty()) {
             continue;
         }
+        if (!latest.contains(id)) {
+            order << id;
+        }
+        latest.insert(id, obj);
+    }
+    for (const QString &id : std::as_const(order)) {
+        const QJsonObject obj = latest.value(id);
         if (obj.contains(QLatin1String("@removed"))) {
             Item item;
             item.setRemoteId(id);
             mRemoved.append(item);
             continue;
         }
-        // An id listed twice in a round (paging can do that): the later entry holds.
-        mChanged.removeIf([&id](const Item &earlier) {
-            return earlier.remoteId() == id;
-        });
         switch (mType) {
         case Type::Events: {
             auto event = GraphEventHandler::toEvent(obj);

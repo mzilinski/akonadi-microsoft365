@@ -292,6 +292,18 @@ private Q_SLOTS:
         QVERIFY(GraphContactHandler::phonesBeyondLimit(a).isEmpty());
     }
 
+    void shouldNotGiveASecondMobileEntryOfTheSameNumberAPlace()
+    {
+        KContacts::Addressee a;
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("0170 1"), KContacts::PhoneNumber::Cell));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("01701"), KContacts::PhoneNumber::Cell));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("w1"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("f1"), KContacts::PhoneNumber::Work | KContacts::PhoneNumber::Fax));
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), (QJsonArray{QStringLiteral("w1"), QStringLiteral("f1")}));
+        QVERIFY(GraphContactHandler::phonesBeyondLimit(a).isEmpty());
+    }
+
     void shouldComeToRestAfterTheServersAnswer()
     {
         // toJson -> server -> toAddressee -> toJson must not move numbers around.

@@ -30,6 +30,7 @@ private:
         int error = 0;
         bool fullListing = false;
         Item::List changed;
+        Item::List removed;
         QString deltaLink;
         QList<ScriptedGraphServer::Request> requests;
         QHash<QString, QStringList> series;
@@ -58,6 +59,7 @@ private:
         r.error = job->error();
         r.fullListing = job->isFullListing();
         r.changed = job->changedItems();
+        r.removed = job->removedItems();
         r.deltaLink = job->deltaLink();
         r.requests = server.requests();
         r.series = job->seriesExceptions();
@@ -340,6 +342,26 @@ private Q_SLOTS:
         QVERIFY(r.series.value(QStringLiteral("X")).isEmpty()); // One item for it, the later one.
         QCOMPARE(r.changed.size(), 1);
         QCOMPARE(r.changed.first().payload<KCalendarCore::Incidence::Ptr>()->summary(), QStringLiteral("Once"));
+    }
+
+    // Found in the seventh review: a change and a tombstone of one id in a round
+    // landed in both lists; the later entry holds.
+    void shouldTakeTheLaterOfAChangeAndATombstone()
+    {
+        const QByteArray deletedLast = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"t1\",\"title\":\"Task\"},{\"id\":\"t1\",\"@removed\":{\"reason\":\"deleted\"}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        Run r = run({{200, deletedLast}}, QStringLiteral("/delta?token=1"));
+        QCOMPARE(r.error, 0);
+        QVERIFY(r.changed.isEmpty());
+        QCOMPARE(r.removed.size(), 1);
+        const QByteArray changedLast = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"t1\",\"@removed\":{\"reason\":\"deleted\"}},{\"id\":\"t1\",\"title\":\"Back\"}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        r = run({{200, changedLast}}, QStringLiteral("/delta?token=1"));
+        QCOMPARE(r.error, 0);
+        QCOMPARE(r.changed.size(), 1);
+        QVERIFY(r.removed.isEmpty());
     }
 };
 

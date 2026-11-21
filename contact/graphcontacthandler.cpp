@@ -168,7 +168,8 @@ PhoneSlots placePhones(const Addressee &a)
     // numbers before fax, pager and further mobile numbers, a business place first.
     const QStringList overflow = workNumbers.mid(kMaxPhonesPerKind) + homeNumbers.mid(kMaxPhonesPerKind) + ordered(others);
     for (const QString &number : overflow) {
-        if (among(slots.business, number) || among(slots.home, number)) {
+        // (A second entry of the mobile number too: the first one is sent.)
+        if (among(slots.business, number) || among(slots.home, number) || (!slots.mobile.isEmpty() && phoneKey(number) == phoneKey(slots.mobile))) {
             continue;
         }
         if (slots.business.size() < kMaxPhonesPerKind) {
