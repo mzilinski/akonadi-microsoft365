@@ -126,6 +126,11 @@ PhoneSlots placePhones(const Addressee &a)
         if (p.number().isEmpty() || i == mobileIndex) {
             continue;
         }
+        // A further mobile entry of the mobile number is that number (sent as such);
+        // a work, home or fax entry of it is a number of its own and keeps its place.
+        if ((p.type() & PhoneNumber::Cell) && !phoneKey(p.number()).isEmpty() && phoneKey(p.number()) == phoneKey(slots.mobile)) {
+            continue;
+        }
         const bool noPlace = p.type() & (PhoneNumber::Fax | PhoneNumber::Pager | PhoneNumber::Cell | PhoneNumber::Modem | PhoneNumber::Bbs | PhoneNumber::Msg);
         const std::pair<bool, QString> entry{p.type().testFlag(PhoneNumber::Pref), p.number()};
         if ((p.type() & PhoneNumber::Home) && !noPlace) {
@@ -168,8 +173,7 @@ PhoneSlots placePhones(const Addressee &a)
     // numbers before fax, pager and further mobile numbers, a business place first.
     const QStringList overflow = workNumbers.mid(kMaxPhonesPerKind) + homeNumbers.mid(kMaxPhonesPerKind) + ordered(others);
     for (const QString &number : overflow) {
-        // (A second entry of the mobile number too: the first one is sent.)
-        if (among(slots.business, number) || among(slots.home, number) || (!slots.mobile.isEmpty() && phoneKey(number) == phoneKey(slots.mobile))) {
+        if (among(slots.business, number) || among(slots.home, number)) {
             continue;
         }
         if (slots.business.size() < kMaxPhonesPerKind) {

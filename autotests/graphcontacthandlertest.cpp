@@ -304,6 +304,25 @@ private Q_SLOTS:
         QVERIFY(GraphContactHandler::phonesBeyondLimit(a).isEmpty());
     }
 
+    void shouldKeepOtherEntriesOfTheMobileNumberInTheOverflow()
+    {
+        // Found in the eighth review: only a further mobile entry is the mobile number;
+        // a third work number or a fax equal to it keeps its place.
+        KContacts::Addressee a;
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("w1"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("w2"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("5"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("5"), KContacts::PhoneNumber::Cell));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("5"), KContacts::PhoneNumber::Fax));
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QCOMPARE(json.value(QLatin1String("mobilePhone")).toString(), QStringLiteral("5"));
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), (QJsonArray{QStringLiteral("w1"), QStringLiteral("w2")}));
+        // The third work number takes the free home place (the fax of the same
+        // number is kept by it).
+        QCOMPARE(json.value(QLatin1String("homePhones")).toArray(), QJsonArray{QStringLiteral("5")});
+        QVERIFY(GraphContactHandler::phonesBeyondLimit(a).isEmpty());
+    }
+
     void shouldComeToRestAfterTheServersAnswer()
     {
         // toJson -> server -> toAddressee -> toJson must not move numbers around.
