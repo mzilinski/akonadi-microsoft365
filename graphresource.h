@@ -17,6 +17,7 @@
 #include "graphclient/graphclient.h"
 
 #include <KCalendarCore/Event>
+#include <KContacts/Addressee>
 #include <QJsonObject>
 #include <QPointer>
 
@@ -280,6 +281,8 @@ private:
     // A move the server cannot carry out without harm: the items from @p index on go
     // back to @p source locally (where the server still has them), the user is told
     // why, and those moved before are committed.
+    // Graph keeps at most three e-mail addresses; tell the user which ones are lost.
+    void warnAboutUnsavedContactFields(const KContacts::Addressee &addressee);
     void refuseMove(const Akonadi::Item::List &items,
                     int index,
                     const std::shared_ptr<Akonadi::Item::List> &moved,

@@ -157,6 +157,10 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             mChanged.append(item);
             if (obj.value(QLatin1String("type")).toString() == QLatin1String("seriesMaster")) {
                 mMasters.insert(id, event);
+            } else {
+                // Not (or no longer) a series: it has no changed occurrences, and the
+                // exception items of a series that was made a single event go.
+                mSeriesExceptions.insert(id, {});
             }
             break;
         }
@@ -206,7 +210,7 @@ void GraphFetchPimItemsJob::fetchExceptionIds()
     auto batch = new GraphBatchJob(mClient, calls, this);
     batch->setIgnoreNotFound(true); // a series deleted meanwhile: its tombstone follows
     connect(batch, &KJob::result, this, [this, batch, masters](KJob *job) {
-        if (job->error()) {
+        if (failsTheRound(batch)) {
             setError(job->error());
             setErrorText(job->errorText());
             emitResult();
@@ -217,7 +221,7 @@ void GraphFetchPimItemsJob::fetchExceptionIds()
         for (int i = 0; i < masters.size(); ++i) {
             const QJsonObject master = responses.value(i);
             if (master.isEmpty()) {
-                continue; // gone: no statement about its occurrences
+                continue; // gone, or refused for good: no statement about its occurrences
             }
             QStringList ids;
             const QJsonArray occurrences = master.value(QLatin1String("exceptionOccurrences")).toArray();
@@ -229,6 +233,10 @@ void GraphFetchPimItemsJob::fetchExceptionIds()
                 }
             }
             mSeriesExceptions.insert(masters.at(i), ids);
+            if (!ids.isEmpty()) {
+                // A move would recreate the series without them (see movePimItem()).
+                mMasters.value(masters.at(i))->setCustomProperty("GRAPH", "HAS-EXCEPTIONS", QStringLiteral("1"));
+            }
         }
         if (exceptions.isEmpty()) {
             emitResult();
@@ -249,7 +257,7 @@ void GraphFetchPimItemsJob::fetchExceptions(const QList<QPair<QString, QString>>
     auto batch = new GraphBatchJob(mClient, calls, this);
     batch->setIgnoreNotFound(true);
     connect(batch, &KJob::result, this, [this, batch, exceptions](KJob *job) {
-        if (job->error()) {
+        if (failsTheRound(batch)) {
             setError(job->error());
             setErrorText(job->errorText());
             emitResult();
@@ -258,6 +266,11 @@ void GraphFetchPimItemsJob::fetchExceptions(const QList<QPair<QString, QString>>
         const QList<QJsonObject> responses = batch->responses();
         for (int i = 0; i < exceptions.size(); ++i) {
             const auto &[masterId, id] = exceptions.at(i);
+            if (responses.value(i).isEmpty() && !batch->wasNotFound(i)) {
+                // Refused for good: nothing is known of this series' occurrences now.
+                mSeriesExceptions.remove(masterId);
+                continue;
+            }
             const auto event = GraphEventHandler::toException(responses.value(i), mMasters.value(masterId));
             if (!event) {
                 // Gone since it was listed (no body), or unreadable: dropped from the
@@ -275,6 +288,14 @@ void GraphFetchPimItemsJob::fetchExceptions(const QList<QPair<QString, QString>>
         emitResult();
     });
     batch->start();
+}
+
+bool GraphFetchPimItemsJob::failsTheRound(const GraphBatchJob *batch)
+{
+    // A call that may work next time fails the round, so that its delta link is not
+    // saved and nothing is missed. One refused for good (403, 400, ...) would fail
+    // every poll of the calendar: its series is left without a statement instead.
+    return batch->error() && (batch->failed(GraphRequest::Failure::NotExecuted) > 0 || batch->failed(GraphRequest::Failure::Uncertain) > 0);
 }
 
 QHash<QString, QStringList> GraphFetchPimItemsJob::seriesExceptions() const

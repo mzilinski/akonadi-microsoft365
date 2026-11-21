@@ -166,6 +166,25 @@ KContacts::Addressee toAddressee(const QJsonObject &json)
     return a;
 }
 
+QStringList emailsBeyondLimit(const KContacts::Addressee &a)
+{
+    Email::List emailList = a.emailList();
+    std::stable_partition(emailList.begin(), emailList.end(), [](const Email &e) {
+        return e.isPreferred();
+    });
+    QStringList beyond;
+    int kept = 0;
+    for (const Email &e : std::as_const(emailList)) {
+        if (e.mail().isEmpty()) {
+            continue;
+        }
+        if (++kept > kMaxEmails) {
+            beyond << e.mail();
+        }
+    }
+    return beyond;
+}
+
 QJsonObject toJson(const KContacts::Addressee &a)
 {
     QJsonObject json;
@@ -205,25 +224,29 @@ QJsonObject toJson(const KContacts::Addressee &a)
     }
     json.insert(QStringLiteral("emailAddresses"), emails);
 
-    // Graph has business and home numbers and one mobile number. Fax, pager, modem
-    // and mailbox numbers have no place there; sending them as business numbers put
-    // them where they do not belong.
-    const PhoneNumber::Type noPlace = PhoneNumber::Fax | PhoneNumber::Pager | PhoneNumber::Modem | PhoneNumber::Bbs | PhoneNumber::Msg;
+    // Graph has business and home numbers and one mobile number. The preferred mobile
+    // number goes there; other mobile, fax, pager and further numbers have no place of
+    // their own and go with the business numbers: left out, they would vanish locally
+    // with the next sync, which brings the contact back as the server has it.
     QJsonArray business, home;
     const auto phones = a.phoneNumbers();
     QString mobile;
-    bool mobileIsPreferred = false;
     for (const PhoneNumber &p : phones) {
-        if (p.number().isEmpty() || (p.type() & noPlace)) {
+        if (p.number().isEmpty() || !(p.type() & PhoneNumber::Cell)) {
             continue;
         }
-        if (p.type() & PhoneNumber::Cell) {
-            const bool preferred = p.type().testFlag(PhoneNumber::Pref);
-            if (mobile.isEmpty() || (preferred && !mobileIsPreferred)) {
-                mobile = p.number();
-                mobileIsPreferred = preferred;
+        if (mobile.isEmpty() || p.type().testFlag(PhoneNumber::Pref)) {
+            mobile = p.number();
+            if (p.type().testFlag(PhoneNumber::Pref)) {
+                break;
             }
-        } else if (p.type() & PhoneNumber::Home) {
+        }
+    }
+    for (const PhoneNumber &p : phones) {
+        if (p.number().isEmpty() || p.number() == mobile) {
+            continue;
+        }
+        if ((p.type() & PhoneNumber::Home) && !(p.type() & (PhoneNumber::Fax | PhoneNumber::Pager | PhoneNumber::Cell))) {
             home.append(p.number());
         } else {
             business.append(p.number());

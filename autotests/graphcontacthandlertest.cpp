@@ -167,6 +167,7 @@ private:
         return converter.parseVCard(converter.createVCard(a));
     }
 
+private Q_SLOTS:
     void shouldKeepTheDisplayNamesOfEmailAddresses()
     {
         const KContacts::Addressee a = throughVCard(GraphContactHandler::toAddressee(serverContact()));
@@ -189,17 +190,31 @@ private:
         QCOMPARE(emails.at(0).toObject().value(QLatin1String("address")).toString(), QStringLiteral("a3@example.org"));
     }
 
-    void shouldNotSendFaxOrPagerNumbersAsBusinessNumbers()
+    void shouldKeepEveryNumberAndSendThePreferredMobile()
     {
+        // Numbers Graph has no field for go with the business numbers: left out, the
+        // next sync would drop them locally (found in review).
         KContacts::Addressee a;
         a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("1"), KContacts::PhoneNumber::Work));
         a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("2"), KContacts::PhoneNumber::Work | KContacts::PhoneNumber::Fax));
         a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("3"), KContacts::PhoneNumber::Pager));
         a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("4"), KContacts::PhoneNumber::Cell));
         a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("5"), KContacts::PhoneNumber::Cell | KContacts::PhoneNumber::Pref));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("6"), KContacts::PhoneNumber::Home));
         const QJsonObject json = GraphContactHandler::toJson(a);
-        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), QJsonArray{QStringLiteral("1")});
         QCOMPARE(json.value(QLatin1String("mobilePhone")).toString(), QStringLiteral("5"));
+        QCOMPARE(json.value(QLatin1String("homePhones")).toArray(), QJsonArray{QStringLiteral("6")});
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(),
+                 (QJsonArray{QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("3"), QStringLiteral("4")}));
+    }
+
+    void shouldNameTheEmailAddressesGraphCannotKeep()
+    {
+        KContacts::Addressee a;
+        for (int i = 0; i < 4; ++i) {
+            a.addEmail(KContacts::Email(QStringLiteral("a%1@example.org").arg(i)));
+        }
+        QCOMPARE(GraphContactHandler::emailsBeyondLimit(a), QStringList{QStringLiteral("a3@example.org")});
     }
 
     void shouldClearARemovedAddressAndMobileTheServerHad()

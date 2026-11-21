@@ -20,6 +20,7 @@
 #include <QHash>
 #include <QStringList>
 
+class GraphBatchJob;
 class GraphClient;
 
 class GraphFetchPimItemsJob : public KJob
@@ -62,6 +63,7 @@ private:
     void resolveContactsFolderThenStart();
     void fetchPhotos();
     void fetchExceptionIds();
+    [[nodiscard]] static bool failsTheRound(const GraphBatchJob *batch);
     void fetchExceptions(const QList<QPair<QString, QString>> &exceptions); // (master id, exception id)
 
     GraphClient &mClient;

@@ -158,6 +158,56 @@ private Q_SLOTS:
         QVERIFY(r.series.contains(QStringLiteral("MASTER")));
         QVERIFY(r.series.value(QStringLiteral("MASTER")).isEmpty());
     }
+
+    // Found in the second review: a series made a single event in Outlook comes as
+    // singleInstance; its local exception items must go.
+    void shouldListNoChangedOccurrencesForASingleEvent()
+    {
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"WAS-SERIES\",\"type\":\"singleInstance\",\"subject\":\"Once now\","
+            "\"start\":{\"dateTime\":\"2027-03-01T12:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T13:00:00.0000000\",\"timeZone\":\"UTC\"}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const Run r = run({{200, delta}}, QStringLiteral("/delta?token=1"), GraphFetchPimItemsJob::Type::Events);
+        QCOMPARE(r.error, 0);
+        QVERIFY(r.series.contains(QStringLiteral("WAS-SERIES")));
+        QVERIFY(r.series.value(QStringLiteral("WAS-SERIES")).isEmpty());
+        QCOMPARE(r.requests.size(), 1); // nothing to ask of a single event
+    }
+
+    // Found in the second review: one series refused for good failed every poll.
+    void shouldGoOnWithoutASeriesThatIsRefusedForGood()
+    {
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const QByteArray refused =
+            QByteArrayLiteral("{\"responses\":[{\"id\":\"0\",\"status\":403,\"body\":{\"error\":{\"code\":\"ErrorAccessDenied\",\"message\":\"no\"}}}]}");
+        const Run r = run({{200, delta}, {200, refused}}, QStringLiteral("/delta?token=1"), GraphFetchPimItemsJob::Type::Events);
+        QCOMPARE(r.error, 0);
+        QCOMPARE(r.changed.size(), 1);
+        // No statement about its occurrences: its local exception items are kept.
+        QVERIFY(!r.series.contains(QStringLiteral("MASTER")));
+    }
+
+    void shouldFailTheRoundWhenTheOccurrencesCannotBeAskedNow()
+    {
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const QByteArray down = QByteArrayLiteral("{\"responses\":[{\"id\":\"0\",\"status\":500,\"body\":{}}]}");
+        const Run r = run({{200, delta}, {200, down}}, QStringLiteral("/delta?token=1"), GraphFetchPimItemsJob::Type::Events);
+        // Uncertain: the round fails, so that its delta link is not saved.
+        QVERIFY(r.error != 0);
+    }
 };
 
 QTEST_GUILESS_MAIN(GraphFetchPimItemsJobTest)

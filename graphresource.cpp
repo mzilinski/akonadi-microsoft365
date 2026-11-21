@@ -71,8 +71,12 @@ constexpr int kSignInRetrySeconds = 60;
 // Version of the event and task mapping. Raising it re-lists those collections once,
 // so that items cached by an older mapping are rebuilt. 1: event time zones, all
 // recurrence patterns, Windows zone names on tasks. 2: event bodies in full with a
-// fingerprint of what was read, the server's showAs kept.
-constexpr int kPimMappingVersion = 2;
+// fingerprint of what was read, the server's showAs kept. 3: cancelled and changed
+// occurrences of series, reminders, what the server had of a task (body, status).
+constexpr int kPimMappingVersion = 3;
+// Version of the contact mapping, as kPimMappingVersion. 1: display names of e-mail
+// addresses, which single-valued fields the server had.
+constexpr int kContactMappingVersion = 1;
 // Version of the mail sync state. 1: the stored deltaLinks no longer carry $top,
 // which capped every delta round at 200 messages.
 constexpr int kMailMappingVersion = 1;
@@ -1306,6 +1310,7 @@ void GraphResource::itemChanged(const Item &item, const QSet<QByteArray> &partId
             return;
         }
     } else if (mime == GraphContactHandler::mimeType() && item.hasPayload<KContacts::Addressee>()) {
+        warnAboutUnsavedContactFields(item.payload<KContacts::Addressee>());
         patchPimItem(item, QStringLiteral("/me/contacts/%1").arg(item.remoteId()), GraphContactHandler::toJson(item.payload<KContacts::Addressee>()), replay);
         return;
     } else if (mime == GraphTodoHandler::mimeType() && item.hasPayload<KCalendarCore::Incidence::Ptr>()) {
@@ -1612,6 +1617,7 @@ void GraphResource::itemAdded(const Item &item, const Collection &collection)
     // Contact -> POST /me/contacts (default folder)
     if (mime == GraphContactHandler::mimeType()) {
         if (item.hasPayload<KContacts::Addressee>()) {
+            warnAboutUnsavedContactFields(item.payload<KContacts::Addressee>());
             postPimItem(item, QStringLiteral("/me/contacts"), GraphContactHandler::toJson(item.payload<KContacts::Addressee>()), false, replay);
         } else {
             changeProcessed();
@@ -1722,6 +1728,22 @@ void GraphResource::movePimItem(const Item::List &items,
         item.hasPayload<KCalendarCore::Incidence::Ptr>() ? item.payload<KCalendarCore::Incidence::Ptr>().dynamicCast<KCalendarCore::Event>() : nullptr;
     if (!event) {
         failChange(replay, i18n("Cannot move event %1: no payload", item.remoteId()));
+        return;
+    }
+    if (event->hasRecurrenceId()
+        || (event->recurs()
+            && (!event->recurrence()->exDates().isEmpty() || !event->recurrence()->exDateTimes().isEmpty()
+                || !event->customProperty("GRAPH", "HAS-EXCEPTIONS").isEmpty()))) {
+        // Recreated in the destination, a series loses its cancelled and changed
+        // occurrences, and one occurrence would become an event of its own.
+        refuseMove(items,
+                   index,
+                   moved,
+                   source,
+                   i18n("\"%1\" cannot be moved to another calendar: Microsoft 365 cannot move events, and a series would lose its cancelled "
+                        "and changed occurrences.",
+                        event->summary()),
+                   replay);
         return;
     }
     if (!event->attendees().isEmpty()) {
@@ -1884,6 +1906,19 @@ void GraphResource::createMovedCopy(const Item::List &items,
         add->start();
     });
     create->start();
+}
+
+void GraphResource::warnAboutUnsavedContactFields(const KContacts::Addressee &addressee)
+{
+    const QStringList dropped = GraphContactHandler::emailsBeyondLimit(addressee);
+    if (!dropped.isEmpty()) {
+        // The next sync brings the contact back as the server has it, without them.
+        Q_EMIT warning(i18np("Microsoft 365 keeps at most three e-mail addresses per contact; %2 was not saved for %3.",
+                             "Microsoft 365 keeps at most three e-mail addresses per contact; %2 were not saved for %3.",
+                             dropped.size(),
+                             dropped.join(QStringLiteral(", ")),
+                             addressee.realName()));
+    }
 }
 
 void GraphResource::refuseMove(const Item::List &items,
@@ -2467,7 +2502,7 @@ int GraphResource::mappingVersion(const Collection &col)
     case CollectionKind::Mail:
         return kMailMappingVersion;
     case CollectionKind::Contacts:
-        break;
+        return kContactMappingVersion;
     }
     return 0;
 }

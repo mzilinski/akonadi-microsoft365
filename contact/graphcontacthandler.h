@@ -10,6 +10,7 @@
 #include <KContacts/Addressee>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 namespace GraphContactHandler
 {
@@ -17,5 +18,9 @@ namespace GraphContactHandler
 [[nodiscard]] QString mimeType();
 
 [[nodiscard]] KContacts::Addressee toAddressee(const QJsonObject &json);
+/// The e-mail addresses beyond the three Graph keeps (the preferred one first), which
+/// toJson() leaves out.
+[[nodiscard]] QStringList emailsBeyondLimit(const KContacts::Addressee &a);
+
 [[nodiscard]] QJsonObject toJson(const KContacts::Addressee &addressee);
 }
