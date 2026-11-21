@@ -337,7 +337,9 @@ private Q_SLOTS:
         QCOMPARE(r.error, 0);
         QCOMPARE(r.requests.size(), 1);
         QVERIFY(r.series.contains(QStringLiteral("X")));
-        QVERIFY(r.series.value(QStringLiteral("X")).isEmpty());
+        QVERIFY(r.series.value(QStringLiteral("X")).isEmpty()); // One item for it, the later one.
+        QCOMPARE(r.changed.size(), 1);
+        QCOMPARE(r.changed.first().payload<KCalendarCore::Incidence::Ptr>()->summary(), QStringLiteral("Once"));
     }
 };
 

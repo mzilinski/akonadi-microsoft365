@@ -246,7 +246,7 @@ private Q_SLOTS:
         a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h1"), KContacts::PhoneNumber::Home));
         a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h2"), KContacts::PhoneNumber::Home));
         const QJsonObject json = GraphContactHandler::toJson(a);
-        QVERIFY(json.value(QLatin1String("businessPhones")).toArray().contains(QStringLiteral("w3")));
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), (QJsonArray{QStringLiteral("w3"), QStringLiteral("w1")}));
         QCOMPARE(GraphContactHandler::phonesBeyondLimit(a), QStringList{QStringLiteral("w2")});
     }
 
@@ -272,6 +272,42 @@ private Q_SLOTS:
         const QJsonObject json = GraphContactHandler::toJson(a);
         QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), (QJsonArray{QStringLiteral("+49 30 123"), QStringLiteral("+49 30 456")}));
         QVERIFY(GraphContactHandler::phonesBeyondLimit(a).isEmpty());
+    }
+
+    // Found in the fifth review: overflow put a number twice into one list, and a fax
+    // written differently from a work number was not taken for the same.
+    void shouldNotPutTheSameNumberTwiceIntoOneList()
+    {
+        KContacts::Addressee a;
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("123"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h1"), KContacts::PhoneNumber::Home));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h2"), KContacts::PhoneNumber::Home));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("1 2 3"), KContacts::PhoneNumber::Home));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("030-123"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("030\u00a0123"), KContacts::PhoneNumber::Work | KContacts::PhoneNumber::Fax));
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), (QJsonArray{QStringLiteral("123"), QStringLiteral("030-123")}));
+        QCOMPARE(json.value(QLatin1String("homePhones")).toArray(), (QJsonArray{QStringLiteral("h1"), QStringLiteral("h2")}));
+        // Both duplicates are kept by the entry already placed, not reported as lost.
+        QVERIFY(GraphContactHandler::phonesBeyondLimit(a).isEmpty());
+    }
+
+    void shouldComeToRestAfterTheServersAnswer()
+    {
+        // toJson -> server -> toAddressee -> toJson must not move numbers around.
+        KContacts::Addressee a;
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("w1"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("f1"), KContacts::PhoneNumber::Work | KContacts::PhoneNumber::Fax));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("p1"), KContacts::PhoneNumber::Pager));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h1"), KContacts::PhoneNumber::Home));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("m1"), KContacts::PhoneNumber::Cell));
+        const QJsonObject first = GraphContactHandler::toJson(a);
+        QJsonObject server = first;
+        server.insert(QStringLiteral("id"), QStringLiteral("C1"));
+        const QJsonObject second = GraphContactHandler::toJson(GraphContactHandler::toAddressee(server));
+        for (const auto key : {QLatin1String("businessPhones"), QLatin1String("homePhones"), QLatin1String("mobilePhone")}) {
+            QCOMPARE(second.value(key), first.value(key));
+        }
     }
 
     void shouldNameTheEmailAddressesGraphCannotKeep()

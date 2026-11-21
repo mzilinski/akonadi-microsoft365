@@ -78,6 +78,16 @@ QJsonObject emptyAddress()
 // edit).
 constexpr qsizetype kMaxPhonesPerKind = 2;
 
+// A phone number as dialled: separators people type (spaces, also non-breaking ones
+// from pasted text, brackets, dots, slashes, hyphens) do not make another number.
+QString phoneKey(const QString &number)
+{
+    static const QRegularExpression separators(QStringLiteral("[\\s()./-]"), QRegularExpression::UseUnicodePropertiesOption);
+    QString key = number;
+    key.remove(separators);
+    return key;
+}
+
 struct PhoneSlots {
     QString mobile;
     QStringList business;
@@ -133,8 +143,7 @@ PhoneSlots placePhones(const Addressee &a)
         QStringList numbers;
         QSet<QString> seen;
         for (const auto &[preferred, number] : std::as_const(entries)) {
-            QString key = number;
-            key.remove(QRegularExpression(QStringLiteral("[\\s()./-]")));
+            const QString key = phoneKey(number);
             if (!seen.contains(key)) {
                 seen.insert(key);
                 numbers << number;
@@ -146,21 +155,30 @@ PhoneSlots placePhones(const Addressee &a)
     const QStringList homeNumbers = ordered(home);
     slots.business = workNumbers.mid(0, kMaxPhonesPerKind);
     slots.home = homeNumbers.mid(0, kMaxPhonesPerKind);
+    // A number already among the business or home numbers is kept by that entry: an
+    // overflow of it would put it twice into one list, and the next edit would merge
+    // the two again, so the contact never came to rest.
+    const auto among = [](const QStringList &numbers, const QString &number) {
+        const QString key = phoneKey(number);
+        return std::any_of(numbers.cbegin(), numbers.cend(), [&key](const QString &n) {
+            return phoneKey(n) == key;
+        });
+    };
     // What did not fit takes a free place before it is given up: real work and home
     // numbers before fax, pager and further mobile numbers, a business place first.
-    QStringList overflow = workNumbers.mid(kMaxPhonesPerKind) + homeNumbers.mid(kMaxPhonesPerKind);
-    for (const QString &number : ordered(others)) {
-        if (!slots.business.contains(number) && !slots.home.contains(number) && !overflow.contains(number)) {
-            overflow << number;
+    const QStringList overflow = workNumbers.mid(kMaxPhonesPerKind) + homeNumbers.mid(kMaxPhonesPerKind) + ordered(others);
+    for (const QString &number : overflow) {
+        if (among(slots.business, number) || among(slots.home, number)) {
+            continue;
+        }
+        if (slots.business.size() < kMaxPhonesPerKind) {
+            slots.business << number;
+        } else if (slots.home.size() < kMaxPhonesPerKind) {
+            slots.home << number;
+        } else if (!among(slots.dropped, number)) {
+            slots.dropped << number;
         }
     }
-    while (!overflow.isEmpty() && slots.business.size() < kMaxPhonesPerKind) {
-        slots.business << overflow.takeFirst();
-    }
-    while (!overflow.isEmpty() && slots.home.size() < kMaxPhonesPerKind) {
-        slots.home << overflow.takeFirst();
-    }
-    slots.dropped = overflow;
     return slots;
 }
 } // namespace

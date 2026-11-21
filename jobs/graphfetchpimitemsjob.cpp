@@ -145,6 +145,10 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             mRemoved.append(item);
             continue;
         }
+        // An id listed twice in a round (paging can do that): the later entry holds.
+        mChanged.removeIf([&id](const Item &earlier) {
+            return earlier.remoteId() == id;
+        });
         switch (mType) {
         case Type::Events: {
             auto event = GraphEventHandler::toEvent(obj);
@@ -308,8 +312,8 @@ void GraphFetchPimItemsJob::finishExceptions()
     for (const QString &master : std::as_const(mUnstatedMasters)) {
         mSeriesExceptions.remove(master);
     }
-    // Their items were not delivered either, so a full listing must not take them
-    // for gone (failsTheRound() keeps that from happening).
+    // The occurrences of such a series that did come are delivered; a full listing
+    // never gets here with one (failsTheRound() fails it first).
     emitResult();
 }
 
