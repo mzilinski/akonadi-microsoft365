@@ -289,6 +289,9 @@ private:
                     const Akonadi::Collection &source,
                     const QString &message,
                     const Replay &replay);
+    // Put items a client moved back into @p source, where the server still has them,
+    // with their remote ids; then @p done.
+    void putBackLocally(const Akonadi::Item::List &items, const Akonadi::Collection &source, const std::function<void()> &done);
     void deleteMovedOriginal(const Akonadi::Item::List &items,
                              int index,
                              const std::shared_ptr<Akonadi::Item::List> &moved,

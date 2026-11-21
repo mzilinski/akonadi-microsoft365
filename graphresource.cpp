@@ -32,9 +32,10 @@
 #include <Akonadi/CollectionFetchScope>
 #include <Akonadi/CollectionModifyJob>
 #include <Akonadi/EntityDisplayAttribute>
+#include <Akonadi/ItemCreateJob>
+#include <Akonadi/ItemDeleteJob>
 #include <Akonadi/ItemFetchJob>
 #include <Akonadi/ItemFetchScope>
-#include <Akonadi/ItemMoveJob>
 #include <Akonadi/ItemSync>
 #include <Akonadi/SpecialCollectionAttribute>
 #include <Akonadi/SpecialMailCollections>
@@ -1944,24 +1945,57 @@ void GraphResource::refuseMove(const Item::List &items,
                                const Replay &replay)
 {
     // Failing the change would leave the items in the destination locally while the
-    // server keeps them in the source, which no incremental delta corrects. Put them
-    // back, keeping their remote ids; the resource's own session is not recorded for
-    // replay, so this does not come back as another move.
+    // server keeps them in the source, which no incremental delta corrects.
     Q_EMIT error(message);
-    const Item::List rest = items.mid(index);
-    auto undo = new ItemMoveJob(rest, source, this);
-    trackWork(undo);
-    connect(undo, &KJob::result, this, [this, moved, rest, replay](KJob *undoJob) {
-        if (undoJob->error()) {
-            qCWarning(GRAPH_LOG) << "could not move" << rest.size() << "refused items back locally:" << undoJob->errorText();
-        }
+    putBackLocally(items.mid(index), source, [this, moved, replay] {
         if (moved->isEmpty()) {
             skipChange(replay);
         } else {
             commitItems(replay, *moved);
         }
     });
-    undo->start();
+}
+
+void GraphResource::putBackLocally(const Item::List &items, const Collection &source, const std::function<void()> &done)
+{
+    // Not with an ItemMoveJob: the Akonadi server finds none of a resource's own items
+    // for a move it asks for (ItemRetriever leaves them out) and reports success, and a
+    // move clears the remote id anyway. Recreate the items in the source with their
+    // remote ids, then drop the moved ones, which have none left; the resource's own
+    // session is not recorded for replay, so neither reaches the server.
+    if (items.isEmpty()) {
+        done();
+        return;
+    }
+    auto pending = std::make_shared<int>(items.size());
+    auto recreated = std::make_shared<Item::List>();
+    for (const Item &item : items) {
+        auto create = new ItemCreateJob(item, source, this);
+        trackWork(create);
+        connect(create, &KJob::result, this, [this, item, pending, recreated, done](KJob *job) {
+            if (job->error()) {
+                // Left where the client put it: better than losing it locally.
+                qCWarning(GRAPH_LOG) << "could not put back" << item.remoteId() << "locally:" << job->errorText();
+            } else {
+                recreated->append(item);
+            }
+            if (--*pending > 0) {
+                return;
+            }
+            if (recreated->isEmpty()) {
+                done();
+                return;
+            }
+            auto remove = new ItemDeleteJob(*recreated, this);
+            trackWork(remove);
+            connect(remove, &KJob::result, this, [remove, done] {
+                if (remove->error()) {
+                    qCWarning(GRAPH_LOG) << "could not drop the moved copies:" << remove->errorText();
+                }
+                done();
+            });
+        });
+    }
 }
 
 void GraphResource::deleteMovedOriginal(const Item::List &items,
@@ -2129,23 +2163,15 @@ void GraphResource::itemsMoved(const Item::List &items, const Collection &source
         }
         // The rest is still in the source folder on the server (or, after a tolerated
         // 404, nowhere at all), while the client already shows it in the destination.
-        // Put it back where the server has it, keeping the remote id: a message that
-        // is genuinely gone then meets its tombstone in the source folder on the next
-        // poll. The resource's own session is not recorded for replay, so this does
-        // not come back as another move.
-        auto undo = new ItemMoveJob(failed, source, this);
-        trackWork(undo);
-        connect(undo, &KJob::result, this, [this, moved, failed, replay](KJob *undoJob) {
-            if (undoJob->error()) {
-                qCWarning(GRAPH_LOG) << "could not move" << failed.size() << "unmoved items back locally:" << undoJob->errorText();
-            }
+        // Put it back where the server has it, with its remote id: a message that is
+        // genuinely gone then meets its tombstone in the source folder on the next poll.
+        putBackLocally(failed, source, [this, moved, replay] {
             if (moved.isEmpty()) {
                 skipChange(replay);
             } else {
                 commitItems(replay, moved);
             }
         });
-        undo->start();
     });
     job->start();
 }
