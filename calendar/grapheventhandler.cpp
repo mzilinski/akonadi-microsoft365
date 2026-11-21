@@ -59,6 +59,10 @@ constexpr QByteArrayView kServerCancelled("SERVER-CANCELLED");
 // "off". toJsonForUpdate() sends the reminder only when KDE's differs from it, so that
 // an event cached without reminders does not switch the server's off.
 constexpr QByteArrayView kServerReminder("SERVER-REMINDER");
+// The zone a series repeats in (X-KDE-GRAPH-SERIES-ZONE, an IANA id). An all-day
+// series keeps none in its dates, yet Graph names its occurrences by midnight in that
+// zone (originalStart 23:00Z for a day in Berlin): their days are counted there.
+constexpr QByteArrayView kSeriesZone("SERIES-ZONE");
 
 // The reminder of an event as Graph has it: minutes before the start, or -1 for none.
 [[nodiscard]] int reminderMinutes(const Incidence::Ptr &incidence)
@@ -752,6 +756,12 @@ KCalendarCore::Event::Ptr toEvent(const QJsonObject &json)
 
     const bool allDay = json.value(QLatin1String("isAllDay")).toBool();
     event->setAllDay(allDay);
+    if (!json.value(QLatin1String("recurrence")).toObject().isEmpty()) {
+        const QTimeZone zone = eventZone(json, QDateTime());
+        if (zone.isValid()) {
+            event->setCustomProperty(kCustomApp.toByteArray(), kSeriesZone.toByteArray(), QString::fromLatin1(zone.id()));
+        }
+    }
     QDateTime start = parseDateTimeTimeZone(json.value(QLatin1String("start")).toObject());
     QDateTime end = parseDateTimeTimeZone(json.value(QLatin1String("end")).toObject());
     if (allDay) {
@@ -893,12 +903,24 @@ KCalendarCore::Event::Ptr toException(const QJsonObject &json, const KCalendarCo
     event->setUid(master->uid());
     event->clearRecurrence();
     event->removeCustomProperty(kCustomApp.toByteArray(), kKeepServerRecurrence.toByteArray());
-    original = original.toTimeZone(master->dtStart().timeZone());
     if (master->allDay()) {
-        original = QDateTime(original.date(), QTime(0, 0));
+        original = QDateTime(originalDay(master, original), QTime(0, 0));
+    } else {
+        original = original.toTimeZone(master->dtStart().timeZone());
     }
     event->setRecurrenceId(original);
     return event;
+}
+
+QTimeZone seriesZone(const KCalendarCore::Event::Ptr &master)
+{
+    const QTimeZone zone(master->customProperty(kCustomApp.toByteArray(), kSeriesZone.toByteArray()).toLatin1());
+    return zone.isValid() ? zone : master->dtStart().timeZone();
+}
+
+QDate originalDay(const KCalendarCore::Event::Ptr &master, const QDateTime &originalStart)
+{
+    return originalStart.toTimeZone(seriesZone(master)).date();
 }
 
 QStringList newlyCancelledDates(const KCalendarCore::Event::Ptr &master)

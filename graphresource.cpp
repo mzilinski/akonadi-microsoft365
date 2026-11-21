@@ -1501,6 +1501,7 @@ void GraphResource::addOccurrenceChange(const Item &item, const Collection &coll
             return;
         }
         QString masterId;
+        KCalendarCore::Event::Ptr master;
         const auto items = fetch->items();
         for (const Item &candidate : items) {
             if (candidate.remoteId().isEmpty() || !candidate.hasPayload<KCalendarCore::Incidence::Ptr>()) {
@@ -1509,23 +1510,29 @@ void GraphResource::addOccurrenceChange(const Item &item, const Collection &coll
             const auto incidence = candidate.payload<KCalendarCore::Incidence::Ptr>();
             if (incidence->uid() == event->uid() && !incidence->hasRecurrenceId()) {
                 masterId = candidate.remoteId();
+                master = incidence.dynamicCast<KCalendarCore::Event>();
                 break;
             }
         }
-        if (masterId.isEmpty()) {
+        if (masterId.isEmpty() || !master) {
             failChange(replay, i18n("The series of this occurrence is not on the server yet; the change was not sent"));
             return;
         }
-        const QDateTime original = event->recurrenceId().toUTC();
+        // An all-day series names its occurrences by midnight in its own zone; their
+        // days are compared there, never instants in this machine's zone.
+        const bool allDay = master->allDay();
+        const QDateTime original =
+            allDay ? QDateTime(event->recurrenceId().date(), QTime(0, 0), GraphEventHandler::seriesZone(master)) : event->recurrenceId().toUTC();
         findOccurrences(masterId,
                         original.addDays(-1),
                         original.addDays(1),
                         replay,
-                        [this, item, event, masterId, original, replay](const QJsonArray &occurrences) {
+                        [this, item, event, master, masterId, original, allDay, replay](const QJsonArray &occurrences) {
                             QString occurrenceId;
                             for (const auto &o : occurrences) {
                                 const QJsonObject occurrence = o.toObject();
-                                if (QDateTime::fromString(occurrence.value(QLatin1String("originalStart")).toString(), Qt::ISODate) == original) {
+                                const QDateTime start = QDateTime::fromString(occurrence.value(QLatin1String("originalStart")).toString(), Qt::ISODate);
+                                if (allDay ? GraphEventHandler::originalDay(master, start) == original.date() : start == original) {
                                     occurrenceId = occurrence.value(QLatin1String("id")).toString();
                                     break;
                                 }
@@ -1549,15 +1556,15 @@ void GraphResource::cancelOccurrences(const Item &item, const KCalendarCore::Eve
         patchPimItem(item, QStringLiteral("/me/events/%1").arg(item.remoteId()), GraphEventHandler::toJsonForUpdate(master), replay);
         return;
     }
+    // The day is the one in the series' zone, as Graph names cancelled occurrences.
     const QDate date = QDate::fromString(dates.at(index), Qt::ISODate);
-    const QTimeZone zone = master->dtStart().timeZone();
-    const QDateTime from(date, QTime(0, 0), zone);
-    findOccurrences(item.remoteId(), from, from.addDays(1), replay, [this, item, master, dates, index, date, zone, replay](const QJsonArray &occurrences) {
+    const QDateTime from(date, QTime(0, 0), GraphEventHandler::seriesZone(master));
+    findOccurrences(item.remoteId(), from, from.addDays(1), replay, [this, item, master, dates, index, date, replay](const QJsonArray &occurrences) {
         QString occurrenceId;
         for (const auto &o : occurrences) {
             const QJsonObject occurrence = o.toObject();
             const QDateTime original = QDateTime::fromString(occurrence.value(QLatin1String("originalStart")).toString(), Qt::ISODate);
-            if (original.toTimeZone(zone).date() == date) {
+            if (GraphEventHandler::originalDay(master, original) == date) {
                 occurrenceId = occurrence.value(QLatin1String("id")).toString();
                 break;
             }

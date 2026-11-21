@@ -1284,6 +1284,66 @@ private Q_SLOTS:
         QVERIFY(event);
         QVERIFY(!GraphEventHandler::toJsonForUpdate(event).contains(QLatin1String("isReminderOn")));
     }
+
+    // Found in the third review, checked live: an all-day series names its
+    // occurrences by midnight in its own zone, given as a UTC instant (23:00Z the day
+    // before, for Berlin), and its cancelled ones by the day in that zone.
+    void shouldDateTheOccurrencesOfAnAllDaySeriesInTheSeriesZone()
+    {
+        const QJsonObject berlinDay{{QStringLiteral("dateTime"), QStringLiteral("2027-03-01T00:00:00.0000000")},
+                                    {QStringLiteral("timeZone"), QStringLiteral("Europe/Berlin")}};
+        const QJsonObject berlinNext{{QStringLiteral("dateTime"), QStringLiteral("2027-03-02T00:00:00.0000000")},
+                                     {QStringLiteral("timeZone"), QStringLiteral("Europe/Berlin")}};
+        QJsonObject json;
+        json.insert(QStringLiteral("id"), QStringLiteral("ALLDAY"));
+        json.insert(QStringLiteral("iCalUId"), QStringLiteral("ALLDAY-UID"));
+        json.insert(QStringLiteral("type"), QStringLiteral("seriesMaster"));
+        json.insert(QStringLiteral("isAllDay"), true);
+        json.insert(QStringLiteral("start"), berlinDay);
+        json.insert(QStringLiteral("end"), berlinNext);
+        json.insert(QStringLiteral("originalStartTimeZone"), QStringLiteral("Europe/Berlin"));
+        json.insert(QStringLiteral("recurrence"),
+                    QJsonObject{{QStringLiteral("pattern"), QJsonObject{{QStringLiteral("type"), QStringLiteral("daily")}, {QStringLiteral("interval"), 1}}},
+                                {QStringLiteral("range"),
+                                 QJsonObject{{QStringLiteral("type"), QStringLiteral("numbered")},
+                                             {QStringLiteral("startDate"), QStringLiteral("2027-03-01")},
+                                             {QStringLiteral("numberOfOccurrences"), 5},
+                                             {QStringLiteral("recurrenceTimeZone"), QStringLiteral("Europe/Berlin")}}}});
+        json.insert(QStringLiteral("cancelledOccurrences"), QJsonArray{QStringLiteral("OID.ALLDAY.2027-03-03")});
+        const Event::Ptr master = throughICal(GraphEventHandler::toEvent(json));
+        QVERIFY(master && master->allDay());
+        QCOMPARE(master->recurrence()->exDates(), QList<QDate>{QDate(2027, 3, 3)});
+        // The series' own zone, not this machine's.
+        QCOMPARE(GraphEventHandler::seriesZone(master).id(), QByteArrayLiteral("Europe/Berlin"));
+        QCOMPARE(GraphEventHandler::originalDay(master, QDateTime::fromString(QStringLiteral("2027-03-02T23:00:00Z"), Qt::ISODate)), QDate(2027, 3, 3));
+
+        QJsonObject occurrence;
+        occurrence.insert(QStringLiteral("id"), QStringLiteral("OCC"));
+        occurrence.insert(QStringLiteral("type"), QStringLiteral("exception"));
+        occurrence.insert(QStringLiteral("isAllDay"), true);
+        occurrence.insert(QStringLiteral("originalStart"), QStringLiteral("2027-03-01T23:00:00Z")); // 2 March in Berlin
+        occurrence.insert(
+            QStringLiteral("start"),
+            QJsonObject{{QStringLiteral("dateTime"), QStringLiteral("2027-03-02T00:00:00.0000000")}, {QStringLiteral("timeZone"), QStringLiteral("UTC")}});
+        occurrence.insert(
+            QStringLiteral("end"),
+            QJsonObject{{QStringLiteral("dateTime"), QStringLiteral("2027-03-03T00:00:00.0000000")}, {QStringLiteral("timeZone"), QStringLiteral("UTC")}});
+        const Event::Ptr exception = GraphEventHandler::toException(occurrence, master);
+        QVERIFY(exception);
+        QCOMPARE(exception->recurrenceId().date(), QDate(2027, 3, 2));
+    }
+
+    void shouldCountTheDaysOfATimedSeriesInItsZone()
+    {
+        // 00:30 in Berlin is the day before in UTC; Graph names it by the Berlin day.
+        QJsonObject json = dailySeriesJson();
+        json.insert(QStringLiteral("start"), graphDateTime(QStringLiteral("2027-02-28T23:30:00.0000000")));
+        json.insert(QStringLiteral("end"), graphDateTime(QStringLiteral("2027-03-01T00:00:00.0000000")));
+        const Event::Ptr master = throughICal(GraphEventHandler::toEvent(json));
+        QVERIFY(master);
+        QCOMPARE(GraphEventHandler::originalDay(master, QDateTime::fromString(QStringLiteral("2027-03-02T23:30:00Z"), Qt::ISODate)), QDate(2027, 3, 3));
+        QCOMPARE(master->recurrence()->exDateTimes(), QList<QDateTime>{QDateTime(QDate(2027, 3, 4), QTime(0, 30), QTimeZone("Europe/Berlin"))});
+    }
 };
 
 QTEST_GUILESS_MAIN(GraphEventHandlerTest)

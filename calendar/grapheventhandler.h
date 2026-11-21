@@ -32,6 +32,14 @@ namespace GraphEventHandler
 /// keeps exceptions. Null without originalStart or master.
 [[nodiscard]] KCalendarCore::Event::Ptr toException(const QJsonObject &json, const KCalendarCore::Event::Ptr &master);
 
+/// The zone the series @p master repeats in, as read; its start's zone without one.
+[[nodiscard]] QTimeZone seriesZone(const KCalendarCore::Event::Ptr &master);
+
+/// The day of an occurrence of @p master whose originalStart is @p originalStart,
+/// counted in the series' zone (as Graph names cancelled occurrences, and as an
+/// all-day series has its days).
+[[nodiscard]] QDate originalDay(const KCalendarCore::Event::Ptr &master, const QDateTime &originalStart);
+
 /// Dates of occurrences excluded in KDE (EXDATE) that the server had not cancelled
 /// when the series was read: those to cancel there.
 [[nodiscard]] QStringList newlyCancelledDates(const KCalendarCore::Event::Ptr &master);
