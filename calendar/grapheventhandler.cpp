@@ -207,13 +207,30 @@ constexpr const char *kIndexNames[] = {"first", "second", "third", "fourth"};
     return QTimeZone::utc();
 }
 
-// All-day events carry a bare date: midnight, written as UTC like Outlook does.
-[[nodiscard]] QJsonObject toAllDayDateTime(const QDate &date)
+// All-day events carry a bare date: midnight, written in the given zone.
+[[nodiscard]] QJsonObject toAllDayDateTime(const QDate &date, const QTimeZone &zone)
 {
     QJsonObject o;
     o.insert(QStringLiteral("dateTime"), QString(date.toString(Qt::ISODate) + QLatin1String("T00:00:00.0000000")));
-    o.insert(QStringLiteral("timeZone"), QStringLiteral("UTC"));
+    o.insert(QStringLiteral("timeZone"), timeZoneToGraph(zone));
     return o;
+}
+
+// The zone the dates of an all-day incidence are written in. An all-day series read
+// from the server keeps the zone it repeats in: written as UTC, Exchange either refuses
+// the start (ErrorOccurrenceTimeSpanTooBig) or, with the recurrence in UTC as well,
+// moves the whole series to UTC and drops its changed and cancelled occurrences.
+// Anything else is written as UTC, like Outlook does.
+[[nodiscard]] QTimeZone allDayZone(const Incidence::Ptr &incidence)
+{
+    const QString id = incidence->customProperty(kCustomApp.toByteArray(), kSeriesZone.toByteArray());
+    if (!id.isEmpty()) {
+        const QTimeZone zone(id.toLatin1());
+        if (zone.isValid() && !timeZoneToGraph(zone).isEmpty()) {
+            return zone;
+        }
+    }
+    return QTimeZone::utc();
 }
 
 // The zone a timed event lives in. Graph returns UTC instants; a series is expanded in
@@ -685,7 +702,7 @@ QJsonObject recurrenceToJson(const Incidence::Ptr &incidence)
     // Dates of the range are in the recurrence's zone, the one the start is written in.
     const bool allDay = r->allDay();
     const QDateTime anchor = incidence->dateTime(Incidence::RoleRecurrenceStart);
-    const QTimeZone zone = allDay ? QTimeZone::utc() : writableZone(anchor);
+    const QTimeZone zone = allDay ? allDayZone(incidence) : writableZone(anchor);
     const QDate startDate = allDay ? anchor.date() : anchor.toTimeZone(zone).date();
 
     const QJsonObject server = storedServerRecurrence(incidence);
@@ -964,9 +981,10 @@ QJsonObject toJson(const KCalendarCore::Event::Ptr &event)
     const bool allDay = event->allDay();
     json.insert(QStringLiteral("isAllDay"), allDay);
     if (allDay) {
-        json.insert(QStringLiteral("start"), toAllDayDateTime(event->dtStart().date()));
+        const QTimeZone zone = allDayZone(event);
+        json.insert(QStringLiteral("start"), toAllDayDateTime(event->dtStart().date(), zone));
         // Mirror the inclusive/exclusive conversion from toEvent().
-        json.insert(QStringLiteral("end"), toAllDayDateTime(event->dtEnd().date().addDays(1)));
+        json.insert(QStringLiteral("end"), toAllDayDateTime(event->dtEnd().date().addDays(1), zone));
     } else {
         json.insert(QStringLiteral("start"), toDateTimeTimeZone(event->dtStart()));
         json.insert(QStringLiteral("end"), toDateTimeTimeZone(event->dtEnd()));

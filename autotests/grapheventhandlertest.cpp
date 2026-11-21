@@ -1333,6 +1333,50 @@ private Q_SLOTS:
         QCOMPARE(exception->recurrenceId().date(), QDate(2027, 3, 2));
     }
 
+    void shouldWriteAnAllDaySeriesInItsOwnZone()
+    {
+        // As Graph returns an all-day series made in Outlook: the dates as UTC, the
+        // zone it repeats in beside them. Written back as UTC, Exchange moved the whole
+        // series to UTC and dropped its exceptions (live-checked 2026-11-21).
+        QJsonObject json;
+        json.insert(QStringLiteral("id"), QStringLiteral("ALLDAY"));
+        json.insert(QStringLiteral("type"), QStringLiteral("seriesMaster"));
+        json.insert(QStringLiteral("isAllDay"), true);
+        json.insert(QStringLiteral("start"), graphDateTime(QStringLiteral("2026-12-14T00:00:00.0000000"), QStringLiteral("UTC")));
+        json.insert(QStringLiteral("end"), graphDateTime(QStringLiteral("2026-12-15T00:00:00.0000000"), QStringLiteral("UTC")));
+        json.insert(QStringLiteral("originalStartTimeZone"), QStringLiteral("UTC"));
+        json.insert(QStringLiteral("recurrence"),
+                    QJsonObject{{QStringLiteral("pattern"), QJsonObject{{QStringLiteral("type"), QStringLiteral("daily")}, {QStringLiteral("interval"), 1}}},
+                                {QStringLiteral("range"),
+                                 QJsonObject{{QStringLiteral("type"), QStringLiteral("numbered")},
+                                             {QStringLiteral("startDate"), QStringLiteral("2026-12-14")},
+                                             {QStringLiteral("numberOfOccurrences"), 5},
+                                             {QStringLiteral("recurrenceTimeZone"), QStringLiteral("W. Europe Standard Time")}}}});
+        const Event::Ptr master = throughICal(GraphEventHandler::toEvent(json));
+        QVERIFY(master && master->allDay());
+
+        const QJsonObject out = GraphEventHandler::toJsonForUpdate(master);
+        const QString berlin = QStringLiteral("W. Europe Standard Time");
+        QCOMPARE(out.value(QLatin1String("start")).toObject(), graphDateTime(QStringLiteral("2026-12-14T00:00:00.0000000"), berlin));
+        QCOMPARE(out.value(QLatin1String("end")).toObject(), graphDateTime(QStringLiteral("2026-12-15T00:00:00.0000000"), berlin));
+        const QJsonObject range = out.value(QLatin1String("recurrence")).toObject().value(QLatin1String("range")).toObject();
+        QCOMPARE(range.value(QLatin1String("recurrenceTimeZone")).toString(), berlin);
+        QCOMPARE(range.value(QLatin1String("startDate")).toString(), QStringLiteral("2026-12-14"));
+    }
+
+    void shouldWriteAnAllDaySeriesMadeInKdeAsUtc()
+    {
+        Event::Ptr series(new Event);
+        series->setAllDay(true);
+        series->setDtStart(QDateTime(QDate(2026, 12, 14), QTime(0, 0)));
+        series->setDtEnd(QDateTime(QDate(2026, 12, 14), QTime(0, 0)));
+        series->recurrence()->setDaily(1);
+        const QJsonObject out = GraphEventHandler::toJson(series);
+        QCOMPARE(out.value(QLatin1String("start")).toObject(), graphDateTime(QStringLiteral("2026-12-14T00:00:00.0000000"), QStringLiteral("UTC")));
+        QCOMPARE(out.value(QLatin1String("recurrence")).toObject().value(QLatin1String("range")).toObject().value(QLatin1String("recurrenceTimeZone")).toString(),
+                 QStringLiteral("UTC"));
+    }
+
     void shouldTakeTheStartZoneOfASeriesWithoutAStoredZone()
     {
         // Made in KOrganizer and not read back yet: no SERIES-ZONE. QTimeZone of an
