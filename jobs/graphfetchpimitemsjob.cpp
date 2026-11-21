@@ -158,9 +158,12 @@ void GraphFetchPimItemsJob::onDeltaFinished(KJob *job)
             mChanged.append(item);
             if (obj.value(QLatin1String("type")).toString() == QLatin1String("seriesMaster")) {
                 mMasters.insert(id, event);
+                mSeriesExceptions.remove(id); // stated again once its occurrences are asked
             } else {
                 // Not (or no longer) a series: it has no changed occurrences, and the
-                // exception items of a series that was made a single event go.
+                // exception items of a series that was made a single event go. The
+                // later entry of an id listed twice in a round is the one that holds.
+                mMasters.remove(id);
                 mSeriesExceptions.insert(id, {});
             }
             break;
@@ -270,9 +273,8 @@ void GraphFetchPimItemsJob::fetchExceptions(const QList<QPair<QString, QString>>
         const QList<QJsonObject> responses = batch->responses();
         for (int i = 0; i < exceptions.size(); ++i) {
             const auto &[masterId, id] = exceptions.at(i);
-            if (mUnstatedMasters.contains(masterId)) {
-                continue;
-            }
+            // An occurrence that came is delivered even when another of its series was
+            // refused; only the list of the series' occurrences is then given up.
             if (responses.value(i).isEmpty() && !batch->wasNotFound(i)) {
                 // Refused for good: nothing is known of this series' occurrences now.
                 mUnstatedMasters.insert(masterId);
@@ -315,6 +317,11 @@ bool GraphFetchPimItemsJob::failsTheRound(const GraphBatchJob *batch) const
 {
     if (!batch->error()) {
         return false;
+    }
+    // The batch itself failed: nothing is known of any call in it. Its status may even
+    // read 200 (an answer cut off, or one that could not be read).
+    if (batch->failedAsAWhole()) {
+        return true;
     }
     // A full listing deletes whatever it does not list: every failure but "gone"
     // fails it, or the exception items of a series it could not ask would go.

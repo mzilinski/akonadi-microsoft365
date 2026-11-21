@@ -57,6 +57,10 @@ public:
     /// The HTTP status each call ended with: its own, or that of the /$batch request
     /// when the batch failed as a whole (0: no answer at all).
     [[nodiscard]] QList<int> statuses() const;
+    /// The /$batch request itself failed (refused, cut off, unreadable): the calls of
+    /// that batch and those after it got no answer of their own, whatever statuses()
+    /// says for them.
+    [[nodiscard]] bool failedAsAWhole() const;
     /// Calls the server carried out (including tolerated 404s).
     [[nodiscard]] int succeeded() const;
     /// Failed calls of the given class (see GraphRequest::Failure).
@@ -76,6 +80,7 @@ private:
     QList<QJsonValue> mBodies;
     QList<QJsonObject> mHeaders;
     QList<int> mStatuses;
+    bool mFailedAsAWhole = false;
     QList<int> mPending; // indexes not yet answered, in issue order
     QString mFirstErrorText;
     int mFailed = 0;

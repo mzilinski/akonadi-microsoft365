@@ -119,6 +119,7 @@ void GraphBatchJob::issueNextBatch()
             // The server itself did not answer (no token yet, network gone, or the
             // batch was rejected as a whole): nothing further will get through either,
             // so account for every remaining call and stop.
+            mFailedAsAWhole = true;
             for (const int i : indexes + mPending) {
                 mStatuses[i] = req->httpStatus();
                 failCall(job->error(), job->errorText(), req->failure(), req->authenticationRejected());
@@ -236,6 +237,11 @@ QList<QJsonObject> GraphBatchJob::responses() const
 QList<QJsonValue> GraphBatchJob::bodies() const
 {
     return mBodies;
+}
+
+bool GraphBatchJob::failedAsAWhole() const
+{
+    return mFailedAsAWhole;
 }
 
 QList<int> GraphBatchJob::statuses() const

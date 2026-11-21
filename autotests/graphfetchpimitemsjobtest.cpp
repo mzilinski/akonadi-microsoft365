@@ -283,6 +283,61 @@ private Q_SLOTS:
         const Run r = run({{200, delta}, {200, ids}, {200, occurrences}}, QStringLiteral("/delta?token=1"), GraphFetchPimItemsJob::Type::Events);
         QCOMPARE(r.error, 0);
         QVERIFY(!r.series.contains(QStringLiteral("MASTER")));
+        // C came, though A before it was refused: it is delivered all the same.
+        QCOMPARE(r.changed.size(), 2);
+        QCOMPARE(r.changed.at(1).remoteId(), QStringLiteral("C"));
+    }
+
+    // Found in the fourth review: the batch itself failing must fail the round, in
+    // an incremental round too, and also when its status reads 200.
+    void shouldFailAnIncrementalRoundOnABatchRefusedAsAWhole()
+    {
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const Run r = run({{200, delta}, {400, QByteArrayLiteral("{\"error\":{\"code\":\"BadRequest\",\"message\":\"no\"}}")}},
+                          QStringLiteral("/delta?token=1"),
+                          GraphFetchPimItemsJob::Type::Events);
+        QVERIFY(r.error != 0);
+    }
+
+    void shouldFailTheRoundOnABatchAnswerThatCannotBeRead()
+    {
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"MASTER\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const Run r =
+            run({{200, delta}, {200, QByteArrayLiteral("{\"responses\":[{\"id\":")}}, QStringLiteral("/delta?token=1"), GraphFetchPimItemsJob::Type::Events);
+        QVERIFY(r.error != 0);
+    }
+
+    void shouldTakeTheLaterEntryOfAnIdListedTwice()
+    {
+        // First as a series, then (made a single event meanwhile) as a single event:
+        // nothing to ask, and its exception items go.
+        const QByteArray delta = QByteArrayLiteral(
+            "{\"value\":[{\"id\":\"X\",\"type\":\"seriesMaster\",\"subject\":\"Daily\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"recurrence\":{\"pattern\":{\"type\":\"daily\",\"interval\":1},"
+            "\"range\":{\"type\":\"noEnd\",\"startDate\":\"2027-03-01\",\"recurrenceTimeZone\":\"UTC\"}}},"
+            "{\"id\":\"X\",\"type\":\"singleInstance\",\"subject\":\"Once\","
+            "\"start\":{\"dateTime\":\"2027-03-01T09:00:00.0000000\",\"timeZone\":\"UTC\"},"
+            "\"end\":{\"dateTime\":\"2027-03-01T09:30:00.0000000\",\"timeZone\":\"UTC\"}}],"
+            "\"@odata.deltaLink\":\"{BASE}/delta?token=2\"}");
+        const Run r = run({{200, delta}}, QStringLiteral("/delta?token=1"), GraphFetchPimItemsJob::Type::Events);
+        QCOMPARE(r.error, 0);
+        QCOMPARE(r.requests.size(), 1);
+        QVERIFY(r.series.contains(QStringLiteral("X")));
+        QVERIFY(r.series.value(QStringLiteral("X")).isEmpty());
     }
 };
 

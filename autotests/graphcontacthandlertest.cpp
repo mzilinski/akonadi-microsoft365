@@ -235,6 +235,45 @@ private Q_SLOTS:
         QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), QJsonArray{QStringLiteral("5")});
     }
 
+    // Found in the fourth review: when places run out, the preferred number and real
+    // home numbers come first, and the same number twice takes one place.
+    void shouldKeepThePreferredNumberWhenPlacesRunOut()
+    {
+        KContacts::Addressee a;
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("w1"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("w2"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("w3"), KContacts::PhoneNumber::Work | KContacts::PhoneNumber::Pref));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h1"), KContacts::PhoneNumber::Home));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h2"), KContacts::PhoneNumber::Home));
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QVERIFY(json.value(QLatin1String("businessPhones")).toArray().contains(QStringLiteral("w3")));
+        QCOMPARE(GraphContactHandler::phonesBeyondLimit(a), QStringList{QStringLiteral("w2")});
+    }
+
+    void shouldPlaceAHomeNumberBeforeAFax()
+    {
+        KContacts::Addressee a;
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h1"), KContacts::PhoneNumber::Home));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h2"), KContacts::PhoneNumber::Home));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("h3"), KContacts::PhoneNumber::Home));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("w1"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("f1"), KContacts::PhoneNumber::Work | KContacts::PhoneNumber::Fax));
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), (QJsonArray{QStringLiteral("w1"), QStringLiteral("h3")}));
+        QCOMPARE(GraphContactHandler::phonesBeyondLimit(a), QStringList{QStringLiteral("f1")});
+    }
+
+    void shouldTakeTheSameNumberOnceWithinAKind()
+    {
+        KContacts::Addressee a;
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("+49 30 123"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("+49 (30) 123"), KContacts::PhoneNumber::Work));
+        a.insertPhoneNumber(KContacts::PhoneNumber(QStringLiteral("+49 30 456"), KContacts::PhoneNumber::Work));
+        const QJsonObject json = GraphContactHandler::toJson(a);
+        QCOMPARE(json.value(QLatin1String("businessPhones")).toArray(), (QJsonArray{QStringLiteral("+49 30 123"), QStringLiteral("+49 30 456")}));
+        QVERIFY(GraphContactHandler::phonesBeyondLimit(a).isEmpty());
+    }
+
     void shouldNameTheEmailAddressesGraphCannotKeep()
     {
         KContacts::Addressee a;

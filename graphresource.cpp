@@ -1921,7 +1921,7 @@ void GraphResource::warnAboutUnsavedContactFields(const KContacts::Addressee &ad
     const QStringList emails = GraphContactHandler::emailsBeyondLimit(addressee);
     if (!emails.isEmpty()) {
         Q_EMIT warning(i18np("Microsoft 365 keeps at most three e-mail addresses per contact; %2 was not saved for %3.",
-                             "Microsoft 365 keeps at most three e-mail addresses per contact; %2 were not saved for %3.",
+                             "Microsoft 365 keeps at most three e-mail addresses per contact; %1 of them (%2) were not saved for %3.",
                              emails.size(),
                              emails.join(QStringLiteral(", ")),
                              addressee.realName()));
@@ -1929,7 +1929,7 @@ void GraphResource::warnAboutUnsavedContactFields(const KContacts::Addressee &ad
     const QStringList phones = GraphContactHandler::phonesBeyondLimit(addressee);
     if (!phones.isEmpty()) {
         Q_EMIT warning(i18np("Microsoft 365 keeps one mobile, two business and two home numbers per contact; %2 was not saved for %3.",
-                             "Microsoft 365 keeps one mobile, two business and two home numbers per contact; %2 were not saved for %3.",
+                             "Microsoft 365 keeps one mobile, two business and two home numbers per contact; %1 of them (%2) were not saved for %3.",
                              phones.size(),
                              phones.join(QStringLiteral(", ")),
                              addressee.realName()));

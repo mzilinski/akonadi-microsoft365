@@ -12,6 +12,8 @@
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
+#include <QSet>
 
 #include <algorithm>
 
@@ -106,31 +108,57 @@ PhoneSlots placePhones(const Addressee &a)
     // (fax, pager, further mobile numbers): left out of the PATCH, a number would
     // vanish locally with the next sync, which brings the contact back as the server
     // has it. Only that one entry is skipped, not every entry of the same number.
-    QStringList work, others, home;
+    // Within each kind the preferred number first; the same number twice in one kind
+    // takes one place. (A work number equal to the mobile one is a number of its own.)
+    QList<std::pair<bool, QString>> work, others, home; // (preferred, number)
     for (qsizetype i = 0; i < phones.size(); ++i) {
         const PhoneNumber &p = phones.at(i);
         if (p.number().isEmpty() || i == mobileIndex) {
             continue;
         }
         const bool noPlace = p.type() & (PhoneNumber::Fax | PhoneNumber::Pager | PhoneNumber::Cell | PhoneNumber::Modem | PhoneNumber::Bbs | PhoneNumber::Msg);
+        const std::pair<bool, QString> entry{p.type().testFlag(PhoneNumber::Pref), p.number()};
         if ((p.type() & PhoneNumber::Home) && !noPlace) {
-            home << p.number();
+            home << entry;
         } else if (noPlace) {
-            others << p.number();
+            others << entry;
         } else {
-            work << p.number();
+            work << entry;
         }
     }
-    QStringList forBusiness = work + others;
-    slots.business = forBusiness.mid(0, kMaxPhonesPerKind);
-    slots.home = home.mid(0, kMaxPhonesPerKind);
-    // What did not fit takes a free place of the other kind before it is given up.
-    QStringList overflow = forBusiness.mid(kMaxPhonesPerKind) + home.mid(kMaxPhonesPerKind);
-    while (!overflow.isEmpty() && slots.home.size() < kMaxPhonesPerKind) {
-        slots.home << overflow.takeFirst();
+    const auto ordered = [](QList<std::pair<bool, QString>> entries) {
+        std::stable_sort(entries.begin(), entries.end(), [](const auto &a, const auto &b) {
+            return a.first && !b.first;
+        });
+        QStringList numbers;
+        QSet<QString> seen;
+        for (const auto &[preferred, number] : std::as_const(entries)) {
+            QString key = number;
+            key.remove(QRegularExpression(QStringLiteral("[\\s()./-]")));
+            if (!seen.contains(key)) {
+                seen.insert(key);
+                numbers << number;
+            }
+        }
+        return numbers;
+    };
+    const QStringList workNumbers = ordered(work);
+    const QStringList homeNumbers = ordered(home);
+    slots.business = workNumbers.mid(0, kMaxPhonesPerKind);
+    slots.home = homeNumbers.mid(0, kMaxPhonesPerKind);
+    // What did not fit takes a free place before it is given up: real work and home
+    // numbers before fax, pager and further mobile numbers, a business place first.
+    QStringList overflow = workNumbers.mid(kMaxPhonesPerKind) + homeNumbers.mid(kMaxPhonesPerKind);
+    for (const QString &number : ordered(others)) {
+        if (!slots.business.contains(number) && !slots.home.contains(number) && !overflow.contains(number)) {
+            overflow << number;
+        }
     }
     while (!overflow.isEmpty() && slots.business.size() < kMaxPhonesPerKind) {
         slots.business << overflow.takeFirst();
+    }
+    while (!overflow.isEmpty() && slots.home.size() < kMaxPhonesPerKind) {
+        slots.home << overflow.takeFirst();
     }
     slots.dropped = overflow;
     return slots;
